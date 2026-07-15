@@ -7,6 +7,8 @@ four-finger pinch, browse apps page by page, search by name, open logical folder
 app with one click. The name is intentional: Lunchpad is to Launchpad what `reqwest` is to
 `request`.
 
+![Lunchpad showing the full-screen paged application grid](preview.png)
+
 ## Highlights
 
 - Native full-screen AppKit interface
