@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Lunchpad",
+    defaultLocalization: "en",
     platforms: [
         .macOS("26.0")
     ],
@@ -10,7 +11,8 @@ let package = Package(
         .executableTarget(
             name: "Lunchpad",
             dependencies: ["MultitouchKit", "ApplicationMonitorKit", "DesktopStateKit"],
-            path: "Sources/Lunchpad"
+            path: "Sources/Lunchpad",
+            resources: [.process("Resources")]
         ),
         .executableTarget(
             name: "AppChangeProbe",
@@ -49,6 +51,10 @@ let package = Package(
         .testTarget(
             name: "DesktopStateKitTests",
             dependencies: ["DesktopStateKit"]
+        ),
+        .testTarget(
+            name: "LunchpadTests",
+            dependencies: ["Lunchpad"]
         )
     ],
     swiftLanguageModes: [.v5]

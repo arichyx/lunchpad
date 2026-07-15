@@ -120,8 +120,8 @@ final class LunchpadWindow: NSWindow {
     private var presentationGeneration = 0
     private var menuBarGradientHeightConstraint: NSLayoutConstraint!
 
-    init(items: [LunchpadItem]) {
-        gridView = IconGridView(items: items)
+    init(items: [LunchpadItem], localizer: AppLocalizer) {
+        gridView = IconGridView(items: items, localizer: localizer)
         super.init(
             contentRect: NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900),
             styleMask: .borderless,
@@ -264,6 +264,10 @@ final class LunchpadWindow: NSWindow {
             animated: catalogChanged && isVisible && !isAnimatingClose,
             invalidatedIconPaths: invalidatedIconPaths
         )
+    }
+
+    func refreshLocalizedContent() {
+        gridView.refreshLocalizedContent()
     }
 
     override func close() {

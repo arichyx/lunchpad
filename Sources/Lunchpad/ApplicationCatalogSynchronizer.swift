@@ -223,12 +223,19 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
         items.flatMap { item -> [String] in
             switch item {
             case .app(let app):
-                return ["app\u{0}\(app.identifier)\u{0}\(app.name)\u{0}\(app.url.path)"]
+                return [
+                    "app\u{0}\(app.identifier)\u{0}\(app.name)\u{0}\(app.url.path)"
+                        + "\u{0}\(app.creationDate?.timeIntervalSinceReferenceDate ?? -1)"
+                        + "\u{0}\(app.modificationDate?.timeIntervalSinceReferenceDate ?? -1)",
+                ]
             case .folder(let folder):
                 return [
                     "folder\u{0}\(folder.identifier)\u{0}\(folder.name)\u{0}\(folder.isSystem)",
                 ] + folder.apps.map {
-                    "member\u{0}\(folder.identifier)\u{0}\($0.identifier)\u{0}\($0.name)\u{0}\($0.url.path)"
+                    "member\u{0}\(folder.identifier)\u{0}\($0.identifier)\u{0}\($0.name)"
+                        + "\u{0}\($0.url.path)"
+                        + "\u{0}\($0.creationDate?.timeIntervalSinceReferenceDate ?? -1)"
+                        + "\u{0}\($0.modificationDate?.timeIntervalSinceReferenceDate ?? -1)"
                 }
             }
         }

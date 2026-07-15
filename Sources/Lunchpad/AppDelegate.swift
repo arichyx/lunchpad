@@ -4,10 +4,15 @@ import MultitouchKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let preferences = LunchpadPreferences()
+    private lazy var localizer = AppLocalizer(language: preferences.interfaceLanguage)
     private var window: LunchpadWindow?
+    private var canonicalItems: [LunchpadItem] = []
     private var catalogSynchronizer: ApplicationCatalogSynchronizer?
-    private var globalHotKey: GlobalHotKey?
-    private var multitouchMonitor: MultitouchMonitor?
+    private var hotKeyController: HotKeyController?
+    private let loginItemController = LoginItemController()
+    private var gestureMonitorController: GestureMonitorController?
+    private var settingsWindowController: SettingsWindowController?
     private var workspaceActivationObserver: NSObjectProtocol?
     private var statusItem: NSStatusItem?
     private var statusMenu: NSMenu?
@@ -16,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var debugLastPrintAt = 0.0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        preferences.onChange = { [weak self] change in
+            self?.applyPreferenceChange(change)
+        }
         let scanner = AppScanner()
         let store: LunchpadLayoutStore?
         do {
@@ -50,15 +58,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Restore logical folders from SQLite after scanning; Finder directories are not folders.
         let items = synchronizer.loadInitialCatalog()
+        canonicalItems = items
         let appCount = items.reduce(0) { $0 + $1.apps.count }
         let folderCount = items.reduce(0) { count, item in
             if case .folder = item { return count + 1 }
             return count
         }
         print("扫描完成：\(appCount) 个应用，\(folderCount) 个文件夹")
-        window = LunchpadWindow(items: items)
+        window = LunchpadWindow(items: presentedItems(from: items), localizer: localizer)
 
         installStatusItem()
+        installApplicationMenu()
         installGlobalHotKey()
         installMultitouchMonitor()
         installWorkspaceActivationObserver()
@@ -66,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         catalogSynchronizer?.stop()
-        multitouchMonitor?.stop()
+        gestureMonitorController?.stop()
         if let workspaceActivationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceActivationObserver)
         }
@@ -77,30 +87,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installGlobalHotKey() {
-        guard let configuration = HotKeyConfiguration.load() else {
-            print("全局快捷键已禁用")
+        let controller = HotKeyController { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.toggleLunchpad()
+            }
+        }
+        controller.start(storedPreference: preferences.hotKey)
+        hotKeyController = controller
+
+        guard let configuration = controller.activeConfiguration else {
+            if let error = controller.lastError {
+                print("⚠️ Global hot key registration failed: \(error)")
+            } else {
+                print("Global hot key disabled")
+            }
             return
         }
 
-        do {
-            globalHotKey = try GlobalHotKey(configuration: configuration) { [weak self] in
-                Task { @MainActor [weak self] in
-                    self?.toggleLunchpad()
-                }
-            }
-            print("全局快捷键已注册：\(configuration.displayName)")
-        } catch {
-            print("⚠️ 注册全局快捷键失败：\(error)")
+        if controller.isExternallyManaged {
+            print("Global hot key registered from LUNCHPAD_HOTKEY: \(configuration.displayName)")
+        } else {
+            print("Global hot key registered: \(configuration.displayName)")
         }
     }
 
     private func installStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = item.button {
+        if statusItem == nil {
+            statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        }
+        if let button = statusItem?.button {
             let configuration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
             let image = NSImage(
                 systemSymbolName: "square.grid.3x3.fill",
-                accessibilityDescription: "Lunchpad"
+                accessibilityDescription: localizer.string("status.accessibility")
             )?.withSymbolConfiguration(configuration)
             image?.isTemplate = true
             button.image = image
@@ -111,18 +130,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
+        rebuildStatusMenu()
+    }
+
+    private func rebuildStatusMenu() {
         let menu = NSMenu()
         let showItem = NSMenuItem(
-            title: "Show Lunchpad",
+            title: localizer.string("menu.show"),
             action: #selector(showLunchpadFromStatusItem(_:)),
             keyEquivalent: ""
         )
         showItem.target = self
         menu.addItem(showItem)
+
+        let settingsItem = NSMenuItem(
+            title: localizer.string("menu.settings"),
+            action: #selector(showSettings(_:)),
+            keyEquivalent: ""
+        )
+        settingsItem.target = self
+        menu.addItem(settingsItem)
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(
-            title: "Quit Lunchpad",
+            title: localizer.string("menu.quit"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
@@ -130,7 +161,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quitItem)
 
         statusMenu = menu
-        statusItem = item
+    }
+
+    private func installApplicationMenu() {
+        let mainMenu = NSMenu()
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu()
+        let settingsItem = NSMenuItem(
+            title: localizer.string("menu.settings"),
+            action: #selector(showSettings(_:)),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        appMenu.addItem(settingsItem)
+        appMenu.addItem(.separator())
+        let quitItem = NSMenuItem(
+            title: localizer.string("menu.quit"),
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        quitItem.target = NSApp
+        appMenu.addItem(quitItem)
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+        NSApp.mainMenu = mainMenu
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
@@ -146,6 +200,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showLunchpadFromStatusItem(_ sender: Any?) {
         showLunchpad()
+    }
+
+    @objc private func showSettings(_ sender: Any?) {
+        window?.close()
+        guard let hotKeyController else { return }
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController(
+                preferences: preferences,
+                localizer: localizer,
+                hotKeyController: hotKeyController,
+                loginItemController: loginItemController,
+                gestureErrorProvider: { [weak self] in
+                    self?.gestureMonitorController?.lastErrorDescription
+                }
+            )
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindowController?.show()
     }
 
     private func installWorkspaceActivationObserver() {
@@ -171,7 +243,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installMultitouchMonitor() {
-        let monitor = MultitouchMonitor(fingerCount: 4)
+        let controller = GestureMonitorController { [weak self] monitor in
+            self?.configureMultitouchMonitor(monitor)
+        }
+        gestureMonitorController = controller
+        controller.setEnabled(preferences.fourFingerPinchEnabled)
+        if let error = controller.lastErrorDescription {
+            print("⚠️ Four-finger pinch monitor failed to start: \(error)")
+        } else if controller.isMonitoring {
+            print("Four-finger pinch monitor started")
+        }
+    }
+
+    private func configureMultitouchMonitor(_ monitor: any GestureMonitoring) {
         let showDesktopStateDetector = ShowDesktopStateDetector()
         let gestureDebugEnabled = ProcessInfo.processInfo.environment[
             "LUNCHPAD_GESTURE_DEBUG"
@@ -188,13 +272,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return !evaluation.isActive
         }
         monitor.onPinch = { [weak self] in
-            print("检测到完整四指捏合，手指已抬起，显示 Lunchpad")
+            print("Four-finger pinch completed; showing Lunchpad")
             Task { @MainActor [weak self] in
                 self?.showLunchpad()
             }
         }
         monitor.onPinchSuppressed = {
-            print("检测到系统正在显示桌面，本次捏合交由 macOS 恢复窗口")
+            print("Show Desktop is active; leaving this pinch to macOS")
         }
         if gestureDebugEnabled {
             monitor.onFrame = { [weak self] frame in
@@ -203,22 +287,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        monitor.onError = { error in
-            print("⚠️ 触控板数据流中断：\(error)")
-        }
-
-        do {
-            try monitor.start()
-            multitouchMonitor = monitor
-            print("四指捏合监听已启动")
-        } catch {
-            // The global hot key remains available when the IOKit path cannot start.
-            print("⚠️ 四指捏合监听启动失败：\(error)")
+        monitor.onError = { [weak self] error in
+            print("⚠️ Trackpad data stream stopped: \(error)")
+            Task { @MainActor [weak self] in
+                self?.gestureMonitorController?.reportRuntimeError(error)
+                self?.settingsWindowController?.refreshLocalizedContent()
+            }
         }
     }
 
     private func showLunchpad() {
         guard let window, !window.isVisible else { return }
+        settingsWindowController?.window?.orderOut(nil)
         NSApp.activate(ignoringOtherApps: true)
         window.show()
     }
@@ -228,13 +308,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         catalogChanged: Bool,
         invalidatedIconPaths: Set<String>?
     ) {
+        canonicalItems = items
         let appCount = items.reduce(0) { $0 + $1.apps.count }
         let reason = catalogChanged ? "目录变化" : "应用内容变化"
         print("应用目录已同步（\(reason)）：\(appCount) 个应用")
         window?.update(
-            items: items,
+            items: presentedItems(from: items),
             catalogChanged: catalogChanged,
             invalidatedIconPaths: invalidatedIconPaths
+        )
+    }
+
+    private func applyPreferenceChange(_ change: LunchpadPreferenceChange) {
+        switch change {
+        case .interfaceLanguage:
+            localizer.setLanguage(preferences.interfaceLanguage)
+            refreshPresentedCatalog(animated: false)
+            rebuildStatusMenu()
+            installApplicationMenu()
+            window?.refreshLocalizedContent()
+            settingsWindowController?.refreshLocalizedContent()
+        case .applicationSortOrder:
+            refreshPresentedCatalog(animated: true)
+            settingsWindowController?.refreshLocalizedContent()
+        case .hotKey:
+            settingsWindowController?.refreshLocalizedContent()
+        case .fourFingerPinch:
+            gestureMonitorController?.setEnabled(preferences.fourFingerPinchEnabled)
+            settingsWindowController?.refreshLocalizedContent()
+        }
+    }
+
+    private func refreshPresentedCatalog(animated: Bool) {
+        window?.update(
+            items: presentedItems(from: canonicalItems),
+            catalogChanged: animated,
+            invalidatedIconPaths: []
+        )
+    }
+
+    private func presentedItems(from items: [LunchpadItem]) -> [LunchpadItem] {
+        ApplicationOrderingPolicy.apply(
+            to: items,
+            order: preferences.applicationSortOrder,
+            locale: localizer.resolvedLanguage.locale,
+            otherFolderName: localizer.string("folder.other")
         )
     }
 
