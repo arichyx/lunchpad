@@ -66,6 +66,8 @@ account. A copy downloaded from the internet may need to be approved once in
 Lunchpad starts quietly in the menu bar and does not open the full-screen interface at launch.
 
 - Pinch inward with four fingers to show Lunchpad.
+- When macOS is showing the desktop, an inward pinch restores the displaced windows without
+  opening Lunchpad, regardless of how Show Desktop was entered.
 - Alternatively, press Control-Shift-Space or left-click the menu bar icon.
 - Swipe horizontally with two fingers, use the arrow keys, or click a page dot to change pages.
 - Type in the search field to find an app.

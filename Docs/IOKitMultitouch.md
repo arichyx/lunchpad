@@ -80,6 +80,15 @@ initial distance is sufficiently large, and no more than three seconds have elap
 after the active contact count drops below four. A four-finger swipe preserves pairwise distances
 closely enough that it does not satisfy the contraction threshold.
 
+On the first contact of a new trackpad sequence, Lunchpad samples WindowServer geometry before the
+four-finger inward motion can start restoring displaced windows. If macOS is actually showing the
+desktop, sizeable layer-zero windows owned by regular applications remain in the on-screen list
+but the overwhelming majority of their centres lie beyond every active display. System-owned base
+windows are ignored, and a small number of sticky or transitional windows may remain visible.
+Lunchpad suppresses only that contact sequence and lets macOS restore the windows. This state-based
+check also covers Hot Corners, keyboard shortcuts, and wallpaper clicks, while a failed outward
+gesture leaves visible windows in place and does not suppress activation.
+
 ## Permissions and compatibility
 
 - The current non-sandboxed SwiftPM app opens the user client directly without displaying an

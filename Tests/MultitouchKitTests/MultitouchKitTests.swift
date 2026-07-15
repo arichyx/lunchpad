@@ -69,10 +69,81 @@ final class MultitouchKitTests: XCTestCase {
         let threeContacts = MultitouchFrame(contacts: Array(fourContacts.contacts.prefix(3)))
         let oneContact = MultitouchFrame(contacts: Array(fourContacts.contacts.prefix(1)))
 
-        XCTAssertFalse(gate.process(fourContacts, pinchDetected: true))
-        XCTAssertFalse(gate.process(threeContacts, pinchDetected: false))
-        XCTAssertTrue(gate.process(oneContact, pinchDetected: false))
-        XCTAssertFalse(gate.process(MultitouchFrame(contacts: []), pinchDetected: false))
+        XCTAssertNil(
+            gate.process(
+                fourContacts,
+                pinchDetected: true,
+                evaluateActivation: { true }
+            )
+        )
+        XCTAssertNil(
+            gate.process(
+                threeContacts,
+                pinchDetected: false,
+                evaluateActivation: { XCTFail("Gesture state was sampled twice"); return true }
+            )
+        )
+        XCTAssertEqual(
+            gate.process(
+                oneContact,
+                pinchDetected: false,
+                evaluateActivation: { XCTFail("Gesture state was sampled twice"); return true }
+            ),
+            .activate
+        )
+        XCTAssertNil(
+            gate.process(
+                MultitouchFrame(contacts: []),
+                pinchDetected: false,
+                evaluateActivation: { XCTFail("Release must not start a gesture"); return true }
+            )
+        )
+    }
+
+    func testShowDesktopStateSuppressesOnlyTheCurrentPinch() {
+        var gate = PinchCompletionGate()
+        let activeFrame = frame(scale: 1.0)
+        let firstContactFrame = MultitouchFrame(contacts: Array(activeFrame.contacts.prefix(1)))
+        let releasedFrame = MultitouchFrame(contacts: [])
+
+        XCTAssertNil(
+            gate.process(
+                firstContactFrame,
+                pinchDetected: false,
+                evaluateActivation: { false }
+            )
+        )
+        XCTAssertNil(
+            gate.process(
+                activeFrame,
+                pinchDetected: true,
+                evaluateActivation: { XCTFail("Gesture state was sampled after first contact"); return true }
+            )
+        )
+        XCTAssertEqual(
+            gate.process(
+                releasedFrame,
+                pinchDetected: false,
+                evaluateActivation: { XCTFail("Release must not resample state"); return true }
+            ),
+            .suppress
+        )
+
+        XCTAssertNil(
+            gate.process(
+                activeFrame,
+                pinchDetected: true,
+                evaluateActivation: { true }
+            )
+        )
+        XCTAssertEqual(
+            gate.process(
+                releasedFrame,
+                pinchDetected: false,
+                evaluateActivation: { XCTFail("Release must not resample state"); return true }
+            ),
+            .activate
+        )
     }
 
     private func frame(scale: Double) -> MultitouchFrame {

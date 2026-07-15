@@ -9,7 +9,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Lunchpad",
-            dependencies: ["MultitouchKit", "ApplicationMonitorKit"],
+            dependencies: ["MultitouchKit", "ApplicationMonitorKit", "DesktopStateKit"],
             path: "Sources/Lunchpad"
         ),
         .executableTarget(
@@ -34,6 +34,10 @@ let package = Package(
             name: "ApplicationMonitorKit",
             path: "Sources/ApplicationMonitorKit"
         ),
+        .target(
+            name: "DesktopStateKit",
+            path: "Sources/DesktopStateKit"
+        ),
         .testTarget(
             name: "MultitouchKitTests",
             dependencies: ["MultitouchKit"]
@@ -41,6 +45,10 @@ let package = Package(
         .testTarget(
             name: "ApplicationMonitorKitTests",
             dependencies: ["ApplicationMonitorKit"]
+        ),
+        .testTarget(
+            name: "DesktopStateKitTests",
+            dependencies: ["DesktopStateKit"]
         )
     ],
     swiftLanguageModes: [.v5]

@@ -1,4 +1,5 @@
 import AppKit
+import DesktopStateKit
 import MultitouchKit
 
 @MainActor
@@ -171,13 +172,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installMultitouchMonitor() {
         let monitor = MultitouchMonitor(fingerCount: 4)
+        let showDesktopStateDetector = ShowDesktopStateDetector()
+        let gestureDebugEnabled = ProcessInfo.processInfo.environment[
+            "LUNCHPAD_GESTURE_DEBUG"
+        ] == "1"
+        monitor.shouldActivatePinch = {
+            let evaluation = showDesktopStateDetector.evaluate()
+            if gestureDebugEnabled {
+                print(
+                    "[Gesture] showDesktop=\(evaluation.isActive) "
+                        + "visible=\(evaluation.visibleWindowCount) "
+                        + "displaced=\(evaluation.displacedWindowCount)"
+                )
+            }
+            return !evaluation.isActive
+        }
         monitor.onPinch = { [weak self] in
             print("检测到完整四指捏合，手指已抬起，显示 Lunchpad")
             Task { @MainActor [weak self] in
                 self?.showLunchpad()
             }
         }
-        if ProcessInfo.processInfo.environment["LUNCHPAD_GESTURE_DEBUG"] == "1" {
+        monitor.onPinchSuppressed = {
+            print("检测到系统正在显示桌面，本次捏合交由 macOS 恢复窗口")
+        }
+        if gestureDebugEnabled {
             monitor.onFrame = { [weak self] frame in
                 Task { @MainActor [weak self] in
                     self?.printGestureDebugFrame(frame)

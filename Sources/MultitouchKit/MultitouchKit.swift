@@ -202,17 +202,42 @@ public struct PinchRecognizer: Sendable {
 /// The system performs an interactive animation while the reserved four-finger gesture is
 /// active. Waiting for contact release prevents that remaining progress from affecting
 /// Lunchpad's fixed-duration animation.
+enum PinchCompletionAction: Sendable, Equatable {
+    case activate
+    case suppress
+}
+
+/// Samples activation policy at the beginning of a contact sequence and waits for release before
+/// returning the result. Sampling on the first contact preserves the pre-restore desktop state.
 struct PinchCompletionGate: Sendable {
     private var isPending = false
+    private var activationAllowed: Bool?
 
-    mutating func process(_ frame: MultitouchFrame, pinchDetected: Bool) -> Bool {
+    mutating func process(
+        _ frame: MultitouchFrame,
+        pinchDetected: Bool,
+        evaluateActivation: () -> Bool
+    ) -> PinchCompletionAction? {
+        let activeContactCount = frame.activeContacts.count
+        if activationAllowed == nil, activeContactCount > 0 {
+            activationAllowed = evaluateActivation()
+        }
+
         if pinchDetected {
             isPending = true
         }
 
-        guard isPending, frame.activeContacts.count < 2 else { return false }
-        isPending = false
-        return true
+        if isPending, activeContactCount < 2 {
+            let action: PinchCompletionAction = activationAllowed == false ? .suppress : .activate
+            isPending = false
+            activationAllowed = nil
+            return action
+        }
+
+        if activeContactCount == 0 {
+            activationAllowed = nil
+        }
+        return nil
     }
 }
 
@@ -247,6 +272,8 @@ public final class MultitouchMonitor: @unchecked Sendable {
 
     public var onFrame: ((MultitouchFrame) -> Void)?
     public var onPinch: (() -> Void)?
+    public var onPinchSuppressed: (() -> Void)?
+    public var shouldActivatePinch: (() -> Bool)?
     public var onError: ((MultitouchMonitorError) -> Void)?
 
     private let worker = DispatchQueue(
@@ -420,8 +447,16 @@ public final class MultitouchMonitor: @unchecked Sendable {
                 guard let frame = parser.parse(bytes) else { continue }
                 let pinchDetected = recognizer.process(frame)
                 onFrame?(frame)
-                if completionGate.process(frame, pinchDetected: pinchDetected) {
+                let completionAction = completionGate.process(
+                    frame,
+                    pinchDetected: pinchDetected
+                ) { [weak self] in
+                    self?.shouldActivatePinch?() ?? true
+                }
+                if completionAction == .activate {
                     onPinch?()
+                } else if completionAction == .suppress {
+                    onPinchSuppressed?()
                 }
             }
         }
