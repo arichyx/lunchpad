@@ -58,7 +58,7 @@ while root apps are reordered among the existing app slots.
 - **THEN** the visible launcher refreshes from its cached catalog without performing a filesystem rescan or resetting folder and page validity
 
 #### Scenario: User switches ordering modes
-- **WHEN** Lunchpad applies either automatic ordering mode
+- **WHEN** Lunchpad applies any automatic ordering mode
 - **THEN** it does not rewrite persisted application assignments or sort positions in the layout database
 
 ### Requirement: Shortcut recording control
