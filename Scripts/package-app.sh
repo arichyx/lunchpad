@@ -18,10 +18,12 @@ zip_path="$output_dir/$archive_base.zip"
 dmg_path="$output_dir/$archive_base.dmg"
 checksum_path="$output_dir/SHA256SUMS.txt"
 
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "VERSION must use MAJOR.MINOR.PATCH format: $version" >&2
+version_pattern='^([0-9]+\.[0-9]+\.[0-9]+)(-([0-9A-Za-z-]+\.)*[0-9A-Za-z-]+)?$'
+if [[ ! "$version" =~ $version_pattern ]]; then
+    echo "VERSION must use MAJOR.MINOR.PATCH or a SemVer prerelease: $version" >&2
     exit 1
 fi
+bundle_version="${BASH_REMATCH[1]}"
 
 if [[ ! "$build_number" =~ ^[0-9]+$ ]]; then
     echo "BUILD_NUMBER must contain digits only: $build_number" >&2
@@ -69,7 +71,7 @@ cp "$project_root/LICENSE" "$app_bundle/Contents/Resources/LICENSE.txt"
 chmod 755 "$app_bundle/Contents/MacOS/$executable_name"
 
 /usr/libexec/PlistBuddy \
-    -c "Set :CFBundleShortVersionString $version" \
+    -c "Set :CFBundleShortVersionString $bundle_version" \
     "$app_bundle/Contents/Info.plist"
 /usr/libexec/PlistBuddy \
     -c "Set :CFBundleVersion $build_number" \

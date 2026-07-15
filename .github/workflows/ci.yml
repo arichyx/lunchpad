@@ -36,13 +36,13 @@ jobs:
 
       - name: Build release artifacts
         env:
-          VERSION: 0.1.0
+          VERSION: 0.0.0-ci.1
           BUILD_NUMBER: ${{ github.run_number }}
           OUTPUT_DIR: ${{ runner.temp }}/lunchpad-dist
         run: ./Scripts/package-app.sh
 
       - name: Verify release artifacts
         env:
-          VERSION: 0.1.0
+          VERSION: 0.0.0-ci.1
           OUTPUT_DIR: ${{ runner.temp }}/lunchpad-dist
         run: ./Scripts/verify-package.sh

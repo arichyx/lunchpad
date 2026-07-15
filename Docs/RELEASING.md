@@ -6,16 +6,18 @@ machine.
 
 ## Versioning
 
-Release tags and user-visible versions use `vMAJOR.MINOR.PATCH`, for example `v0.1.0`.
+Stable release tags use `vMAJOR.MINOR.PATCH`, for example `v0.1.0`. Prerelease tags append a
+SemVer identifier, for example `v0.1.1-beta.1` or `v0.1.1-rc.1`.
 
 - Increment PATCH for compatible bug fixes.
 - Increment MINOR for user-visible features.
 - Reserve `v1.0.0` for a broadly tested stable release.
+- Use prereleases to gather feedback before publishing the corresponding stable version.
 - Never move or reuse a published tag. Publish a new patch version instead.
 
-The release workflow removes the leading `v` and writes the remaining version to
-`CFBundleShortVersionString`. `CFBundleVersion` uses the monotonically increasing GitHub Actions
-run number.
+The release workflow uses the complete version in artifact names and GitHub Releases. macOS
+`CFBundleShortVersionString` remains numeric, so `v0.1.1-beta.1` produces bundle version `0.1.1`.
+`CFBundleVersion` uses the monotonically increasing GitHub Actions run number.
 
 ## Branch policy
 
@@ -32,8 +34,8 @@ tags must point to commits contained in `main`.
 5. Run a local packaging smoke test when packaging code changed:
 
    ```bash
-   VERSION=0.1.0 ./Scripts/package-app.sh
-   VERSION=0.1.0 ./Scripts/verify-package.sh
+   VERSION=0.1.1-beta.1 ./Scripts/package-app.sh
+   VERSION=0.1.1-beta.1 ./Scripts/verify-package.sh
    ```
 
 ## Create a release
@@ -43,8 +45,8 @@ Create and push an annotated tag from `main`:
 ```bash
 git switch main
 git pull --ff-only
-git tag -a v0.1.0 -m "Lunchpad 0.1.0"
-git push origin v0.1.0
+git tag -a v0.1.1-beta.1 -m "Lunchpad 0.1.1-beta.1"
+git push origin v0.1.1-beta.1
 ```
 
 The Release workflow then:
@@ -53,11 +55,13 @@ The Release workflow then:
 2. Runs the test suite.
 3. Builds an ad-hoc-signed app bundle.
 4. Creates versioned DMG and ZIP archives plus `SHA256SUMS.txt`.
-5. Creates a Draft GitHub Release with generated release notes.
+5. Creates a Draft GitHub Release with generated release notes and marks versions containing a
+   prerelease suffix as GitHub prereleases.
 
 Download the draft DMG, drag Lunchpad to Applications, and perform a final smoke test. Review the
 generated notes, add installation and compatibility details when necessary, then publish the
-draft from GitHub.
+draft from GitHub. Publishing `v0.1.1-beta.1` does not replace `v0.1.0` as the latest stable
+release.
 
 ## Signing status
 

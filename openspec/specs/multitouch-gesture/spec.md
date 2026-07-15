@@ -73,6 +73,42 @@ Lunchpad SHALL defer launcher presentation until a recognized pinch has complete
 - **WHEN** the active contact count drops below two after a recognized pinch
 - **THEN** Lunchpad emits exactly one activation and rearms only after the contact sequence resets
 
+### Requirement: Show Desktop restoration
+
+Lunchpad SHALL preserve the system's Show Desktop restoration gesture by sampling the actual
+WindowServer state at the beginning of each four-finger contact sequence. The decision SHALL apply
+only to that contact sequence and SHALL NOT be inferred from a previous outward gesture.
+
+#### Scenario: Show Desktop is active
+
+- **GIVEN** sizeable normal application windows are present in the on-screen WindowServer list but their centres are predominantly displaced beyond every active display
+- **WHEN** the user begins and completes an inward four-finger pinch
+- **THEN** Lunchpad suppresses launcher activation for that contact sequence so macOS can restore the windows
+
+#### Scenario: A sticky window remains visible
+
+- **GIVEN** at least three regular application windows are displaced and outnumber the remaining visible windows by at least three to one
+- **WHEN** the user completes an inward four-finger pinch
+- **THEN** Lunchpad treats the dominant displacement as Show Desktop and suppresses launcher activation
+
+#### Scenario: Show Desktop was entered without a trackpad gesture
+
+- **GIVEN** Show Desktop was entered through a Hot Corner, keyboard shortcut, or wallpaper click
+- **WHEN** WindowServer reports the displaced-window state and the user completes an inward pinch
+- **THEN** Lunchpad suppresses launcher activation for that contact sequence
+
+#### Scenario: Previous outward gesture did not reveal the desktop
+
+- **GIVEN** a previous outward gesture failed and normal application windows remain visible
+- **WHEN** the user completes an inward four-finger pinch
+- **THEN** Lunchpad emits its normal launcher activation
+
+#### Scenario: A later ordinary pinch occurs
+
+- **GIVEN** a Show Desktop restore pinch was previously suppressed
+- **WHEN** a new contact sequence begins while normal application windows are visible and completes as an inward pinch
+- **THEN** Lunchpad emits its normal launcher activation
+
 ### Requirement: Hardware compatibility boundary
 
 Lunchpad SHALL fail safely when a trackpad or macOS release does not provide the verified report format.
