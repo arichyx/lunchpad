@@ -1,44 +1,23 @@
 import Carbon.HIToolbox
 import Foundation
 
-struct HotKeyConfiguration {
-    static let preferencesDomain = "com.arichyx.Lunchpad"
-    static let preferencesKey = "globalHotKey"
+protocol GlobalHotKeyRegistration: AnyObject {}
 
-    let keyCode: UInt32
-    let modifiers: UInt32
-    let displayName: String
+@MainActor
+protocol GlobalHotKeyRegistering {
+    func register(
+        configuration: HotKeyConfiguration,
+        action: @escaping () -> Void
+    ) throws -> any GlobalHotKeyRegistration
+}
 
-    static func load() -> HotKeyConfiguration? {
-        let environment = ProcessInfo.processInfo.environment["LUNCHPAD_HOTKEY"]
-        let preference = UserDefaults(suiteName: preferencesDomain)?.string(
-            forKey: preferencesKey
-        )
-        let name = (environment ?? preference ?? "control-shift-space").lowercased()
-
-        switch name {
-        case "control-shift-space", "ctrl-shift-space":
-            return HotKeyConfiguration(
-                keyCode: UInt32(kVK_Space),
-                modifiers: UInt32(controlKey | shiftKey),
-                displayName: "⌃⇧Space"
-            )
-        case "control-option-l", "ctrl-option-l", "ctrl-alt-l":
-            return HotKeyConfiguration(
-                keyCode: UInt32(kVK_ANSI_L),
-                modifiers: UInt32(controlKey | optionKey),
-                displayName: "⌃⌥L"
-            )
-        case "disabled", "off", "none":
-            return nil
-        default:
-            print("⚠️ 未知快捷键配置 \(name)，回退到 ⌃⇧Space")
-            return HotKeyConfiguration(
-                keyCode: UInt32(kVK_Space),
-                modifiers: UInt32(controlKey | shiftKey),
-                displayName: "⌃⇧Space"
-            )
-        }
+@MainActor
+struct CarbonHotKeyRegistrar: GlobalHotKeyRegistering {
+    func register(
+        configuration: HotKeyConfiguration,
+        action: @escaping () -> Void
+    ) throws -> any GlobalHotKeyRegistration {
+        try GlobalHotKey(configuration: configuration, action: action)
     }
 }
 
@@ -60,18 +39,26 @@ private let globalHotKeyEventHandler: EventHandlerUPP = { _, event, userData in
     guard status == noErr else { return status }
 
     let hotKey = Unmanaged<GlobalHotKey>.fromOpaque(userData).takeUnretainedValue()
+    guard hotKey.matches(hotKeyID) else {
+        return OSStatus(eventNotHandledErr)
+    }
     hotKey.invoke()
     return noErr
 }
 
 /// Carbon global hot key that remains available while Lunchpad is not frontmost.
-final class GlobalHotKey {
+final class GlobalHotKey: GlobalHotKeyRegistration {
+    private static let identifierLock = NSLock()
+    nonisolated(unsafe) private static var nextIdentifier: UInt32 = 1
+
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
     private let action: () -> Void
+    private let hotKeyID: EventHotKeyID
 
     init(configuration: HotKeyConfiguration, action: @escaping () -> Void) throws {
         self.action = action
+        hotKeyID = Self.makeIdentifier()
 
         var eventSpec = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -92,7 +79,6 @@ final class GlobalHotKey {
         eventHandlerRef = installedHandler
 
         var registeredHotKey: EventHotKeyRef?
-        let hotKeyID = EventHotKeyID(signature: OSType(0x4C4E_5044), id: 1) // LNPD
         let registerStatus = RegisterEventHotKey(
             configuration.keyCode,
             configuration.modifiers,
@@ -121,5 +107,17 @@ final class GlobalHotKey {
 
     fileprivate func invoke() {
         action()
+    }
+
+    fileprivate func matches(_ identifier: EventHotKeyID) -> Bool {
+        identifier.signature == hotKeyID.signature && identifier.id == hotKeyID.id
+    }
+
+    private static func makeIdentifier() -> EventHotKeyID {
+        identifierLock.lock()
+        defer { identifierLock.unlock() }
+        let identifier = nextIdentifier
+        nextIdentifier &+= 1
+        return EventHotKeyID(signature: OSType(0x4C4E_5044), id: identifier) // LNPD
     }
 }

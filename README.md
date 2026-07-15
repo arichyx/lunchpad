@@ -19,6 +19,7 @@ app with one click. The name is intentional: Lunchpad is to Launchpad what `reqw
 - Automatic updates when apps are installed, removed, or replaced
 - Layout that adapts to the Dock on any screen edge
 - Menu bar icon and configurable global hot key
+- Native settings in English and Simplified Chinese
 - No cloud service, account, or network connection required
 
 ## Requirements
@@ -74,25 +75,40 @@ Lunchpad starts quietly in the menu bar and does not open the full-screen interf
 - Click an app to close Lunchpad immediately and launch it.
 - Click a folder to browse its contents.
 - Press Escape or click empty space to leave a folder or close Lunchpad.
-- Right-click the menu bar icon for Show and Quit actions.
+- Right-click the menu bar icon for Show, Settings, and Quit actions.
 
-If macOS performs another action for the same four-finger gesture, change or disable that gesture
-in System Settings.
+If macOS performs another action for the same four-finger gesture, disable Four-Finger Pinch in
+Lunchpad Settings or change the system gesture in System Settings.
 
-## Change the global hot key
+## Settings
 
-The default hot key is Control-Shift-Space. It can be changed to Control-Option-L or disabled:
+Open Settings from the menu bar icon or press Command-Comma while Lunchpad is active. Changes apply
+immediately and are stored locally.
+
+- **Language** changes Lunchpad's own interface between Follow System, English, and Simplified
+  Chinese. It does not change application names, which continue to follow macOS bundle localization.
+- **Application Order** sorts apps by name, by the app bundle's filesystem creation time, or by its
+  modification time. Both time modes are newest-first; creation time is not guaranteed to be the
+  installation or release date. Folder positions and stored logical layout positions are preserved
+  when the mode changes.
+- **Keyboard Shortcut** records a modified key or function key. Use Clear to disable the global hot
+  key. Lunchpad keeps the previous shortcut when Carbon reports a registration conflict. macOS does
+  not provide a complete public registry of every application-level or system shortcut, so a
+  successfully registered combination can still overlap behavior handled above Carbon.
+- **Launch at Login** uses the macOS login-item service and is available in the packaged app.
+- **Four-Finger Pinch** can stop or restart the existing trackpad monitor without restarting
+  Lunchpad.
+
+The default shortcut is Control-Shift-Space. For development and hardware testing,
+`LUNCHPAD_HOTKEY` can override the stored setting for one process:
 
 ```bash
-defaults write com.arichyx.Lunchpad globalHotKey -string control-option-l
-defaults write com.arichyx.Lunchpad globalHotKey -string disabled
+LUNCHPAD_HOTKEY=control-option-l .build/debug/Lunchpad
+LUNCHPAD_HOTKEY=disabled .build/debug/Lunchpad
 ```
 
-Restore the default with:
-
-```bash
-defaults delete com.arichyx.Lunchpad globalHotKey
-```
+Recognized override values are `control-shift-space`, `control-option-l`, and `disabled`. While an
+override is active, Settings displays it as externally managed and disables shortcut editing.
 
 ## Local data
 

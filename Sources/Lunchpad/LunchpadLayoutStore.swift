@@ -352,7 +352,7 @@ final class LunchpadLayoutStore {
 
         let folderStatement = try prepare(
             """
-            SELECT id, system_key, name, sort_position, is_system
+            SELECT id, name, sort_position, is_system
             FROM folders
             ORDER BY sort_position, name COLLATE NOCASE
             """
@@ -360,20 +360,19 @@ final class LunchpadLayoutStore {
         defer { sqlite3_finalize(folderStatement) }
         while try step(folderStatement) == SQLITE_ROW {
             let identifier = textColumn(folderStatement, index: 0)
-            let systemKey = optionalTextColumn(folderStatement, index: 1)
-            let storedName = textColumn(folderStatement, index: 2)
+            let storedName = textColumn(folderStatement, index: 1)
             let apps = try applications(in: identifier, onlyPresent: true)
             guard !apps.isEmpty else { continue }
 
-            let displayedName = systemKey == "other" ? localizedOtherName : storedName
+            let displayedName = storedName
             positionedItems.append(PositionedItem(
-                position: sqlite3_column_int64(folderStatement, 3),
+                position: sqlite3_column_int64(folderStatement, 2),
                 name: displayedName,
                 item: .folder(AppFolder(
                     identifier: identifier,
                     name: displayedName,
                     apps: apps,
-                    isSystem: sqlite3_column_int(folderStatement, 4) != 0
+                    isSystem: sqlite3_column_int(folderStatement, 3) != 0
                 ))
             ))
         }
@@ -407,14 +406,10 @@ final class LunchpadLayoutStore {
             identifier: textColumn(statement, index: 0),
             bundleIdentifier: optionalTextColumn(statement, index: 1),
             name: textColumn(statement, index: 2),
-            url: URL(fileURLWithPath: textColumn(statement, index: 3))
+            url: URL(fileURLWithPath: textColumn(statement, index: 3)),
+            creationDate: nil,
+            modificationDate: nil
         )
-    }
-
-    private var localizedOtherName: String {
-        Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
-            ? "其他"
-            : "Other"
     }
 
     private func existingAssignment(for appIdentifier: String) throws -> ExistingAssignment? {

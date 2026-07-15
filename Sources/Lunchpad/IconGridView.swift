@@ -260,7 +260,7 @@ final class IconGridView: NSView {
     private let folderTitleLabel = NSTextField(labelWithString: "")
     private let collectionView = LunchpadCollectionView()
     private let pageIndicator = PageIndicatorView()
-    private let emptyLabel = NSTextField(labelWithString: "没有找到应用")
+    private let emptyLabel = NSTextField(labelWithString: "")
     private let gridLayout = LunchpadGridLayout(
         columns: Layout.columns,
         rows: Layout.rows,
@@ -278,13 +278,16 @@ final class IconGridView: NSView {
     private var collectionLeadingConstraint: NSLayoutConstraint!
     private var collectionTrailingConstraint: NSLayoutConstraint!
     private var pageBottomConstraint: NSLayoutConstraint!
+    private let localizer: AppLocalizer
 
-    init(items: [LunchpadItem]) {
+    init(items: [LunchpadItem], localizer: AppLocalizer) {
         allItems = items
         allApps = items.flatMap(\.apps)
         filteredItems = items
+        self.localizer = localizer
         super.init(frame: .zero)
         setup()
+        refreshLocalizedContent()
         reloadPage(animated: false)
         AppIconCache.shared.prewarm(allApps)
     }
@@ -425,6 +428,11 @@ final class IconGridView: NSView {
         )
         pageBottomConstraint.constant = -(insets.bottom + bottomPadding)
         needsLayout = true
+    }
+
+    func refreshLocalizedContent() {
+        searchField.refreshLocalizedContent(localizer)
+        emptyLabel.stringValue = localizer.string("search.empty")
     }
 
     private func setup() {

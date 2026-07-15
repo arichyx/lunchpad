@@ -49,9 +49,21 @@ bin_dir="$(
         --show-bin-path
 )"
 executable_path="$bin_dir/$executable_name"
+resource_bundle_name="Lunchpad_Lunchpad.bundle"
+resource_bundle_path="$bin_dir/$resource_bundle_name"
 
 if [[ ! -x "$executable_path" ]]; then
     echo "Missing executable: $executable_path" >&2
+    exit 1
+fi
+
+if [[ ! -f "$resource_bundle_path/en.lproj/Localizable.strings" ]]; then
+    echo "Missing English localization: $resource_bundle_path" >&2
+    exit 1
+fi
+
+if [[ ! -f "$resource_bundle_path/zh-hans.lproj/Localizable.strings" ]]; then
+    echo "Missing Simplified Chinese localization: $resource_bundle_path" >&2
     exit 1
 fi
 
@@ -65,6 +77,7 @@ rm -rf \
 mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources"
 
 cp "$executable_path" "$app_bundle/Contents/MacOS/$executable_name"
+ditto "$resource_bundle_path" "$app_bundle/Contents/Resources/$resource_bundle_name"
 cp "$project_root/Packaging/Info.plist" "$app_bundle/Contents/Info.plist"
 cp "$project_root/Resources/AppIcon.icns" "$app_bundle/Contents/Resources/AppIcon.icns"
 cp "$project_root/LICENSE" "$app_bundle/Contents/Resources/LICENSE.txt"

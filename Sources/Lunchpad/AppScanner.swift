@@ -6,6 +6,8 @@ struct AppItem {
     let bundleIdentifier: String?
     let name: String
     let url: URL
+    let creationDate: Date?
+    let modificationDate: Date?
 }
 
 /// A logical Lunchpad folder with no relationship to a Finder directory.
@@ -72,8 +74,17 @@ final class AppScanner {
         ]
     }
 
+    init(roots: [URL], utilityRoots: [URL] = []) {
+        self.roots = roots
+        self.utilityRoots = utilityRoots
+    }
+
     func scanApplications(using store: LunchpadLayoutStore) throws -> [LunchpadItem] {
-        try store.reconcile(discoverApplications())
+        let discovered = discoverApplications()
+        return enrich(
+            try store.reconcile(discovered),
+            from: discovered
+        )
     }
 
     /// Safe fallback when the database is unavailable: show all apps without inferred folders.
@@ -136,12 +147,57 @@ final class AppScanner {
 
         let identifier = bundleIdentifier.map { "bundle:\($0.lowercased())" }
             ?? "path:\(canonicalURL.path)"
+        let resourceValues = try? canonicalURL.resourceValues(
+            forKeys: [.creationDateKey, .contentModificationDateKey]
+        )
         return AppItem(
             identifier: identifier,
             bundleIdentifier: bundleIdentifier,
             name: displayName,
-            url: canonicalURL
+            url: canonicalURL,
+            creationDate: resourceValues?.creationDate,
+            modificationDate: resourceValues?.contentModificationDate
         )
+    }
+
+    private func enrich(
+        _ items: [LunchpadItem],
+        from discovered: [DiscoveredApplication]
+    ) -> [LunchpadItem] {
+        let dates: [String: (creation: Date?, modification: Date?)] = Dictionary(
+            uniqueKeysWithValues: discovered.map {
+                ($0.item.identifier, (
+                    creation: $0.item.creationDate,
+                    modification: $0.item.modificationDate
+                ))
+            }
+        )
+
+        func enriched(_ app: AppItem) -> AppItem {
+            let appDates = dates[app.identifier]
+            return AppItem(
+                identifier: app.identifier,
+                bundleIdentifier: app.bundleIdentifier,
+                name: app.name,
+                url: app.url,
+                creationDate: appDates?.creation,
+                modificationDate: appDates?.modification
+            )
+        }
+
+        return items.map { item in
+            switch item {
+            case .app(let app):
+                return .app(enriched(app))
+            case .folder(let folder):
+                return .folder(AppFolder(
+                    identifier: folder.identifier,
+                    name: folder.name,
+                    apps: folder.apps.map(enriched),
+                    isSystem: folder.isSystem
+                ))
+            }
+        }
     }
 
     private func localizedDisplayName(

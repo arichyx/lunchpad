@@ -36,11 +36,6 @@ final class LunchpadSearchField: NSView, NSTextFieldDelegate {
         layer?.borderWidth = 1
         updateAppearance(isEditing: false)
 
-        let symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
-        searchIcon.image = NSImage(
-            systemSymbolName: "magnifyingglass",
-            accessibilityDescription: "搜索"
-        )?.withSymbolConfiguration(symbolConfiguration)
         searchIcon.contentTintColor = NSColor.white.withAlphaComponent(0.62)
         searchIcon.imageScaling = .scaleProportionallyDown
         searchIcon.translatesAutoresizingMaskIntoConstraints = false
@@ -53,22 +48,11 @@ final class LunchpadSearchField: NSView, NSTextFieldDelegate {
         textField.focusRingType = .none
         textField.font = .systemFont(ofSize: 14, weight: .regular)
         textField.textColor = NSColor.white.withAlphaComponent(0.92)
-        textField.placeholderAttributedString = NSAttributedString(
-            string: "搜索",
-            attributes: [
-                .foregroundColor: NSColor.white.withAlphaComponent(0.48),
-                .font: NSFont.systemFont(ofSize: 14, weight: .regular),
-            ]
-        )
         textField.delegate = self
         textField.translatesAutoresizingMaskIntoConstraints = false
         addSubview(textField)
 
         clearButton.isBordered = false
-        clearButton.image = NSImage(
-            systemSymbolName: "xmark.circle.fill",
-            accessibilityDescription: "清除搜索"
-        )?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .regular))
         clearButton.contentTintColor = NSColor.white.withAlphaComponent(0.48)
         clearButton.target = self
         clearButton.action = #selector(clearSearch)
@@ -92,6 +76,27 @@ final class LunchpadSearchField: NSView, NSTextFieldDelegate {
             clearButton.widthAnchor.constraint(equalToConstant: 16),
             clearButton.heightAnchor.constraint(equalToConstant: 16),
         ])
+    }
+
+    func refreshLocalizedContent(_ localizer: AppLocalizer) {
+        let symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        searchIcon.image = NSImage(
+            systemSymbolName: "magnifyingglass",
+            accessibilityDescription: localizer.string("search.accessibility")
+        )?.withSymbolConfiguration(symbolConfiguration)
+        textField.placeholderAttributedString = NSAttributedString(
+            string: localizer.string("search.placeholder"),
+            attributes: [
+                .foregroundColor: NSColor.white.withAlphaComponent(0.48),
+                .font: NSFont.systemFont(ofSize: 14, weight: .regular),
+            ]
+        )
+        clearButton.image = NSImage(
+            systemSymbolName: "xmark.circle.fill",
+            accessibilityDescription: localizer.string("search.clear.accessibility")
+        )?.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+        )
     }
 
     private func updateAppearance(isEditing: Bool) {
