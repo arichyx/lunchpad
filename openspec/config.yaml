@@ -1,0 +1,14 @@
+schema: spec-driven
+
+context: |
+  Lunchpad is a macOS 26 Tahoe replacement for Apple's removed classic Launchpad.
+  It is a Swift 6 package using AppKit, SQLite, FSEvents, Carbon hot keys, and IOKit.
+  The main app is an accessory-style resident process with no persistent Dock icon.
+  Code comments, README content, OpenSpec artifacts, and commit messages are written in English.
+  Build and test commands must use --package-path because the working directory may vary.
+
+rules:
+  specs:
+    - Describe externally observable behavior and durable system guarantees.
+    - Keep private-driver details in the multitouch capability instead of duplicating them.
+    - Use SHALL or MUST for normative requirements and include concrete scenarios.

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-package:
+    name: Test and package
+    runs-on: macos-26
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Run tests
+        run: swift test --package-path "$GITHUB_WORKSPACE"
+
+      - name: Build release artifacts
+        env:
+          VERSION: 0.1.0
+          BUILD_NUMBER: ${{ github.run_number }}
+          OUTPUT_DIR: ${{ runner.temp }}/lunchpad-dist
+        run: ./Scripts/package-app.sh
+
+      - name: Verify release artifacts
+        env:
+          VERSION: 0.1.0
+          OUTPUT_DIR: ${{ runner.temp }}/lunchpad-dist
+        run: ./Scripts/verify-package.sh
