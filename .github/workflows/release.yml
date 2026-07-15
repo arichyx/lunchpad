@@ -30,8 +30,8 @@ jobs:
       - name: Validate release tag
         shell: bash
         run: |
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tags must use vMAJOR.MINOR.PATCH format." >&2
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-([0-9A-Za-z-]+\.)*[0-9A-Za-z-]+)?$ ]]; then
+            echo "Release tags must use vMAJOR.MINOR.PATCH or a SemVer prerelease." >&2
             exit 1
           fi
 
@@ -79,9 +79,14 @@ jobs:
             fi
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
-              --draft \
-              --generate-notes \
-              --title "Lunchpad $version" \
+            release_flags=(
+              --draft
+              --generate-notes
+              --title "Lunchpad $version"
               --verify-tag
+            )
+            if [[ "$version" == *-* ]]; then
+              release_flags+=(--prerelease)
+            fi
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" "${release_flags[@]}"
           fi

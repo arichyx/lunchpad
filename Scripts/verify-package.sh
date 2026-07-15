@@ -7,6 +7,12 @@ project_root="$(cd "$script_dir/.." && pwd)"
 
 app_name="Lunchpad"
 version="${VERSION:-0.1.0}"
+version_pattern='^([0-9]+\.[0-9]+\.[0-9]+)(-([0-9A-Za-z-]+\.)*[0-9A-Za-z-]+)?$'
+if [[ ! "$version" =~ $version_pattern ]]; then
+    echo "VERSION must use MAJOR.MINOR.PATCH or a SemVer prerelease: $version" >&2
+    exit 1
+fi
+bundle_version_expected="${BASH_REMATCH[1]}"
 target_arch="${TARGET_ARCH:-arm64}"
 output_dir="${OUTPUT_DIR:-$project_root/dist}"
 archive_base="$app_name-$version-macos-$target_arch"
@@ -28,8 +34,8 @@ bundle_version="$(
         "$app_bundle/Contents/Info.plist"
 )"
 
-if [[ "$bundle_version" != "$version" ]]; then
-    echo "Bundle version mismatch: expected $version, found $bundle_version" >&2
+if [[ "$bundle_version" != "$bundle_version_expected" ]]; then
+    echo "Bundle version mismatch: expected $bundle_version_expected, found $bundle_version" >&2
     exit 1
 fi
 
