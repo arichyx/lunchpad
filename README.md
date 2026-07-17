@@ -12,7 +12,7 @@ app with one click. The name is intentional: Lunchpad is to Launchpad what `reqw
 ## Highlights
 
 - Native full-screen AppKit interface
-- Four-finger pinch activation
+- Four-finger pinch activation and spread-to-dismiss
 - Paged app grid with two-finger horizontal swiping
 - Search using localized application names
 - Logical folders, including the default Other folder
@@ -67,6 +67,8 @@ account. A copy downloaded from the internet may need to be approved once in
 Lunchpad starts quietly in the menu bar and does not open the full-screen interface at launch.
 
 - Pinch inward with four fingers to show Lunchpad.
+- Spread outward with four fingers (the reverse of the opening pinch) to close Lunchpad while it
+  is visible. The gesture is recognized only while Lunchpad is on screen.
 - When macOS is showing the desktop, an inward pinch restores the displaced windows without
   opening Lunchpad, regardless of how Show Desktop was entered.
 - Alternatively, press Control-Shift-Space or left-click the menu bar icon.

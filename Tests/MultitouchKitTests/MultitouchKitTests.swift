@@ -63,6 +63,52 @@ final class MultitouchKitTests: XCTestCase {
         XCTAssertTrue(recognizer.process(contracted, at: 20.2))
     }
 
+    func testFourFingerExpansionTriggersOnceAndRearmsAfterRelease() {
+        var recognizer = ExpandRecognizer(fingerCount: 4)
+        let close = frame(scale: 0.5)
+        let almostExpanded = frame(scale: 0.6)
+        let expanded = frame(scale: 0.8)
+
+        XCTAssertFalse(recognizer.process(close, at: 10.0))
+        XCTAssertFalse(recognizer.process(almostExpanded, at: 10.1))
+        XCTAssertTrue(recognizer.process(expanded, at: 10.2))
+        XCTAssertFalse(recognizer.process(expanded, at: 10.3))
+
+        XCTAssertFalse(recognizer.process(MultitouchFrame(contacts: []), at: 10.4))
+        XCTAssertFalse(recognizer.process(close, at: 10.5))
+        XCTAssertTrue(recognizer.process(expanded, at: 10.7))
+    }
+
+    func testTransientFifthContactDoesNotResetFourFingerExpand() {
+        var recognizer = ExpandRecognizer(fingerCount: 4)
+        let extra = MultitouchContact(identifier: 9, state: 2, x: 0.5, y: 0.5)
+        let close = MultitouchFrame(contacts: frame(scale: 0.5).contacts + [extra])
+        let expanded = MultitouchFrame(contacts: frame(scale: 0.8).contacts + [extra])
+
+        XCTAssertFalse(recognizer.process(close, at: 20.0))
+        XCTAssertTrue(recognizer.process(expanded, at: 20.2))
+    }
+
+    func testFourFingerExpandDoesNotFireWhenContactsMoveTogether() {
+        var recognizer = ExpandRecognizer(fingerCount: 4)
+        let together = frame(scale: 0.5)
+
+        XCTAssertFalse(recognizer.process(together, at: 30.0))
+        // Preserved pairwise distances (a swipe, not a spread) never cross the threshold.
+        XCTAssertFalse(recognizer.process(together, at: 30.2))
+    }
+
+    func testExpandResetsBaselineAfterStationaryWindow() {
+        var recognizer = ExpandRecognizer(fingerCount: 4)
+        let close = frame(scale: 0.5)
+        let expanded = frame(scale: 0.8)
+
+        XCTAssertFalse(recognizer.process(close, at: 40.0))
+        // Beyond the three-second window the baseline resets, so the earlier close position
+        // no longer applies and a delayed expansion does not fire on its own.
+        XCTAssertFalse(recognizer.process(expanded, at: 43.2))
+    }
+
     func testPinchCompletionWaitsUntilFingersAreLifted() {
         var gate = PinchCompletionGate()
         let fourContacts = frame(scale: 0.8)
@@ -73,6 +119,7 @@ final class MultitouchKitTests: XCTestCase {
             gate.process(
                 fourContacts,
                 pinchDetected: true,
+                expandDetected: false,
                 evaluateActivation: { true }
             )
         )
@@ -80,6 +127,7 @@ final class MultitouchKitTests: XCTestCase {
             gate.process(
                 threeContacts,
                 pinchDetected: false,
+                expandDetected: false,
                 evaluateActivation: { XCTFail("Gesture state was sampled twice"); return true }
             )
         )
@@ -87,6 +135,7 @@ final class MultitouchKitTests: XCTestCase {
             gate.process(
                 oneContact,
                 pinchDetected: false,
+                expandDetected: false,
                 evaluateActivation: { XCTFail("Gesture state was sampled twice"); return true }
             ),
             .activate
@@ -95,6 +144,7 @@ final class MultitouchKitTests: XCTestCase {
             gate.process(
                 MultitouchFrame(contacts: []),
                 pinchDetected: false,
+                expandDetected: false,
                 evaluateActivation: { XCTFail("Release must not start a gesture"); return true }
             )
         )
@@ -110,6 +160,7 @@ final class MultitouchKitTests: XCTestCase {
             gate.process(
                 firstContactFrame,
                 pinchDetected: false,
+                expandDetected: false,
                 evaluateActivation: { false }
             )
         )
@@ -117,6 +168,7 @@ final class MultitouchKitTests: XCTestCase {
             gate.process(
                 activeFrame,
                 pinchDetected: true,
+                expandDetected: false,
                 evaluateActivation: { XCTFail("Gesture state was sampled after first contact"); return true }
             )
         )
@@ -124,6 +176,7 @@ final class MultitouchKitTests: XCTestCase {
             gate.process(
                 releasedFrame,
                 pinchDetected: false,
+                expandDetected: false,
                 evaluateActivation: { XCTFail("Release must not resample state"); return true }
             ),
             .suppress
@@ -133,6 +186,7 @@ final class MultitouchKitTests: XCTestCase {
             gate.process(
                 activeFrame,
                 pinchDetected: true,
+                expandDetected: false,
                 evaluateActivation: { true }
             )
         )
@@ -140,6 +194,99 @@ final class MultitouchKitTests: XCTestCase {
             gate.process(
                 releasedFrame,
                 pinchDetected: false,
+                expandDetected: false,
+                evaluateActivation: { XCTFail("Release must not resample state"); return true }
+            ),
+            .activate
+        )
+    }
+
+    func testExpandCompletionWaitsUntilFingersAreLifted() {
+        var gate = PinchCompletionGate()
+        let fourContacts = frame(scale: 0.8)
+        let threeContacts = MultitouchFrame(contacts: Array(fourContacts.contacts.prefix(3)))
+        let oneContact = MultitouchFrame(contacts: Array(fourContacts.contacts.prefix(1)))
+
+        XCTAssertNil(
+            gate.process(
+                fourContacts,
+                pinchDetected: false,
+                expandDetected: true,
+                evaluateActivation: { true }
+            )
+        )
+        XCTAssertNil(
+            gate.process(
+                threeContacts,
+                pinchDetected: false,
+                expandDetected: false,
+                evaluateActivation: { XCTFail("Gesture state was sampled twice"); return true }
+            )
+        )
+        XCTAssertEqual(
+            gate.process(
+                oneContact,
+                pinchDetected: false,
+                expandDetected: false,
+                evaluateActivation: { XCTFail("Gesture state was sampled twice"); return true }
+            ),
+            .dismiss
+        )
+        XCTAssertNil(
+            gate.process(
+                MultitouchFrame(contacts: []),
+                pinchDetected: false,
+                expandDetected: false,
+                evaluateActivation: { XCTFail("Release must not start a gesture"); return true }
+            )
+        )
+    }
+
+    func testExpandDismissalIgnoresShowDesktopState() {
+        var gate = PinchCompletionGate()
+        let fourContacts = frame(scale: 0.8)
+        let oneContact = MultitouchFrame(contacts: Array(fourContacts.contacts.prefix(1)))
+
+        // Show Desktop suppression governs activation only; a recognized spread still dismisses.
+        XCTAssertNil(
+            gate.process(
+                fourContacts,
+                pinchDetected: false,
+                expandDetected: true,
+                evaluateActivation: { false }
+            )
+        )
+        XCTAssertEqual(
+            gate.process(
+                oneContact,
+                pinchDetected: false,
+                expandDetected: false,
+                evaluateActivation: { XCTFail("Release must not resample state"); return true }
+            ),
+            .dismiss
+        )
+    }
+
+    func testFirstRecognizedDirectionWinsPerContactSequence() {
+        var gate = PinchCompletionGate()
+        let fourContacts = frame(scale: 0.8)
+        let oneContact = MultitouchFrame(contacts: Array(fourContacts.contacts.prefix(1)))
+
+        // The pinch is recognized first; an expand reported later in the same sequence must not
+        // also produce a dismissal.
+        XCTAssertNil(
+            gate.process(
+                fourContacts,
+                pinchDetected: true,
+                expandDetected: false,
+                evaluateActivation: { true }
+            )
+        )
+        XCTAssertEqual(
+            gate.process(
+                oneContact,
+                pinchDetected: false,
+                expandDetected: true,
                 evaluateActivation: { XCTFail("Release must not resample state"); return true }
             ),
             .activate

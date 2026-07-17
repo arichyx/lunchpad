@@ -125,6 +125,7 @@ private final class FakeGestureFactory {
 private final class FakeGestureMonitor: GestureMonitoring {
     var shouldActivatePinch: (() -> Bool)?
     var onPinch: (() -> Void)?
+    var onExpand: (() -> Void)?
     var onPinchSuppressed: (() -> Void)?
     var onFrame: ((MultitouchFrame) -> Void)?
     var onError: ((MultitouchMonitorError) -> Void)?
