@@ -3,6 +3,7 @@ import MultitouchKit
 protocol GestureMonitoring: AnyObject {
     var shouldActivatePinch: (() -> Bool)? { get set }
     var onPinch: (() -> Void)? { get set }
+    var onExpand: (() -> Void)? { get set }
     var onPinchSuppressed: (() -> Void)? { get set }
     var onFrame: ((MultitouchFrame) -> Void)? { get set }
     var onError: ((MultitouchMonitorError) -> Void)? { get set }

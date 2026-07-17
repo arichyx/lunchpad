@@ -281,6 +281,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.showLunchpad()
             }
         }
+        monitor.onExpand = { [weak self] in
+            print("Four-finger spread completed; hiding Lunchpad")
+            Task { @MainActor [weak self] in
+                self?.dismissLunchpad()
+            }
+        }
         monitor.onPinchSuppressed = {
             print("Show Desktop is active; leaving this pinch to macOS")
         }
@@ -305,6 +311,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindowController?.window?.orderOut(nil)
         NSApp.activate(ignoringOtherApps: true)
         window.show()
+    }
+
+    private func dismissLunchpad() {
+        guard let window, window.isVisible else { return }
+        window.close()
     }
 
     private func applyCatalogRefresh(
