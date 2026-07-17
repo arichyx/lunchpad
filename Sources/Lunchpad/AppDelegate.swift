@@ -65,7 +65,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return count
         }
         print("扫描完成：\(appCount) 个应用，\(folderCount) 个文件夹")
-        window = LunchpadWindow(items: presentedItems(from: items), localizer: localizer)
+        window = LunchpadWindow(
+            items: presentedItems(from: items),
+            localizer: localizer,
+            rootPageStore: RootPageStore()
+        )
 
         installStatusItem()
         installApplicationMenu()

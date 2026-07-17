@@ -317,20 +317,42 @@ final class IconGridView: NSView {
         max(1, Int(ceil(Double(filteredItems.count) / Double(Layout.pageCapacity))))
     }
 
+    /// Page count of the root level, independent of the current folder or search view.
+    ///
+    /// `pageCount` is derived from `filteredItems`, which still reflects a just-closed folder or search
+    /// at `show()` time. Restore must clamp against the root count (from `allItems`) instead, so a
+    /// single-page folder cannot shrink the restored multi-page root page.
+    var rootPageCount: Int {
+        max(1, Int(ceil(Double(allItems.count) / Double(Layout.pageCapacity))))
+    }
+
+    /// The root-level page to persist when the launcher is hidden.
+    var rootPageForPersistence: Int {
+        let searchActive = !searchField.stringValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+        return RootPageSelection.rootPageToSave(
+            folderOpen: currentFolder != nil,
+            searchActive: searchActive,
+            currentPage: currentPage,
+            rootPageBeforeEnteringFolder: rootPageBeforeEnteringFolder
+        )
+    }
+
     private var itemsOnCurrentPage: ArraySlice<LunchpadItem> {
         let start = min(currentPage * Layout.pageCapacity, filteredItems.count)
         let end = min(start + Layout.pageCapacity, filteredItems.count)
         return filteredItems[start..<end]
     }
 
-    func prepareForPresentation() {
+    func prepareForPresentation(restoredRootPage: Int) {
         currentFolder = nil
         rootPageBeforeEnteringFolder = 0
         searchField.stringValue = ""
         searchField.isHidden = false
         folderTitleLabel.isHidden = true
         filteredItems = allItems
-        currentPage = 0
+        currentPage = max(0, restoredRootPage)
         reloadPage(animated: false)
     }
 

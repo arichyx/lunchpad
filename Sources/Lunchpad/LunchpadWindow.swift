@@ -116,12 +116,14 @@ final class LunchpadWindow: NSWindow {
     private let menuBarGradientView = MenuBarGradientView()
     private let menuBarDockCornerWindow = MenuBarDockCornerWindow()
     private let gridView: IconGridView
+    private let rootPageStore: RootPageStore
     private var isAnimatingClose = false
     private var presentationGeneration = 0
     private var menuBarGradientHeightConstraint: NSLayoutConstraint!
 
-    init(items: [LunchpadItem], localizer: AppLocalizer) {
+    init(items: [LunchpadItem], localizer: AppLocalizer, rootPageStore: RootPageStore) {
         gridView = IconGridView(items: items, localizer: localizer)
+        self.rootPageStore = rootPageStore
         super.init(
             contentRect: NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900),
             styleMask: .borderless,
@@ -201,7 +203,10 @@ final class LunchpadWindow: NSWindow {
                 menuBarGradientHeightConstraint.constant
             gridView.updateScreenInsets(insets, availableHeight: contentFrame.height)
         }
-        gridView.prepareForPresentation()
+        let restoredRootPage = rootPageStore.restoredPage(
+            availablePageCount: gridView.rootPageCount
+        )
+        gridView.prepareForPresentation(restoredRootPage: restoredRootPage)
         isAnimatingClose = false
         presentationGeneration &+= 1
         let generation = presentationGeneration
@@ -272,6 +277,7 @@ final class LunchpadWindow: NSWindow {
 
     override func close() {
         guard isVisible, !isAnimatingClose else { return }
+        rootPageStore.save(page: gridView.rootPageForPersistence)
         isAnimatingClose = true
         presentationGeneration &+= 1
 
