@@ -274,6 +274,9 @@ final class IconGridView: NSView {
     private var rootPageBeforeEnteringFolder = 0
     private var currentPage = 0
     private var pressedOnOuterBackground = false
+    /// Page-local index of the keyboard-active item, or `nil` when nothing is active.
+    /// Cleared before every content-changing reload so no stale highlight survives a transition.
+    private var activeIndex: Int?
     private var searchTopConstraint: NSLayoutConstraint!
     private var collectionLeadingConstraint: NSLayoutConstraint!
     private var collectionTrailingConstraint: NSLayoutConstraint!
@@ -429,6 +432,63 @@ final class IconGridView: NSView {
         collectionView.scrollWheel(with: event)
     }
 
+    /// Handles a directional keyboard command from the window or the search field's field editor.
+    ///
+    /// Returns `true` when the grid consumed the command (caller should suppress default behavior)
+    /// and `false` when the command should fall through to normal text-editing caret movement.
+    /// `caretAtEndOfText` is supplied by the search field's field editor; the window path passes
+    /// the default of `false` because no caret is present.
+    @discardableResult
+    func handleNavigationCommand(
+        _ direction: GridNavigationDirection,
+        caretAtEndOfText: Bool = false
+    ) -> Bool {
+        let decision = GridNavigationPolicy.entryDecision(
+            direction: direction,
+            hasActiveItem: activeIndex != nil,
+            visibleItemCount: itemsOnCurrentPage.count,
+            hasNonEmptySearchQuery: currentSearchQueryIsNonEmpty,
+            caretAtEndOfText: caretAtEndOfText
+        )
+
+        switch decision {
+        case .fallThrough:
+            return false
+        case .activate(let index):
+            setActiveIndex(index)
+            return true
+        case .move:
+            guard let current = activeIndex else { return false }
+            let destination = GridNavigationPolicy.move(
+                direction: direction,
+                activeIndex: current,
+                visibleItemCount: itemsOnCurrentPage.count,
+                columns: Layout.columns,
+                rows: Layout.rows
+            )
+            setActiveIndex(destination)
+            return true
+        }
+    }
+
+    /// Activates the current keyboard-active item; otherwise launches the first matching
+    /// application when a search query is nonempty. Returns `true` when something was activated.
+    @discardableResult
+    func activateActiveItemOrFirstSearchResult() -> Bool {
+        let visibleCount = itemsOnCurrentPage.count
+        if let activeIndex, activeIndex < visibleCount {
+            clearActiveIndex()
+            launchItem(at: IndexPath(item: activeIndex, section: 0))
+            return true
+        }
+        return launchFirstSearchResult()
+    }
+
+    /// The trimmed search field contents, used by entry-decision and activation priority rules.
+    private var currentSearchQueryIsNonEmpty: Bool {
+        !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     func updateScreenInsets(_ insets: NSEdgeInsets, availableHeight: CGFloat) {
         let searchTop = insets.top + Layout.topPadding
         searchTopConstraint.constant = searchTop
@@ -527,8 +587,11 @@ final class IconGridView: NSView {
         searchField.onCancel = { [weak self] in
             self?.onBackgroundClick?()
         }
+        searchField.onNavigateDirection = { [weak self] direction, caretAtEnd in
+            self?.handleNavigationCommand(direction, caretAtEndOfText: caretAtEnd) ?? false
+        }
         searchField.onSubmit = { [weak self] in
-            _ = self?.launchFirstSearchResult()
+            _ = self?.activateActiveItemOrFirstSearchResult()
         }
         searchField.translatesAutoresizingMaskIntoConstraints = false
     }
@@ -587,6 +650,9 @@ final class IconGridView: NSView {
 
     private func reloadPage(animated: Bool, direction: Int = 0) {
         currentPage = min(currentPage, pageCount - 1)
+        // Clear before reloading so the previously active cell cannot carry its highlight into a
+        // newly visible page, search result list, or folder contents.
+        clearActiveIndex()
 
         if animated {
             let transition = CATransition()
@@ -618,7 +684,8 @@ final class IconGridView: NSView {
     }
 
     private func launchFirstSearchResult() -> Bool {
-        guard !searchField.stringValue.isEmpty else { return false }
+        guard !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return false }
         guard case .app(let app)? = filteredItems.first else { return false }
         launch(app)
         return true
@@ -635,6 +702,34 @@ final class IconGridView: NSView {
         case .folder(let folder):
             enterFolder(folder)
         }
+    }
+
+    /// Updates the active index and refreshes only the affected visible cells, avoiding icon
+    /// reloads or Launch Services traffic during keyboard movement.
+    private func setActiveIndex(_ index: Int?) {
+        let previous = activeIndex
+        guard previous != index else { return }
+        activeIndex = index
+
+        if let previous {
+            applyActiveState(isActive: false, at: previous)
+        }
+        if let index {
+            applyActiveState(isActive: true, at: index)
+        }
+    }
+
+    /// Clears the keyboard-active state without touching collection-view contents. Called before
+    /// any reload that changes the visible page so the next eligible arrow restarts cleanly.
+    private func clearActiveIndex() {
+        setActiveIndex(nil)
+    }
+
+    private func applyActiveState(isActive: Bool, at index: Int) {
+        guard index < itemsOnCurrentPage.count else { return }
+        let indexPath = IndexPath(item: index, section: 0)
+        guard let cell = collectionView.item(at: indexPath) as? AppIconCell else { return }
+        cell.isKeyboardActive = isActive
     }
 
     /// Closes Lunchpad immediately and sends the launch request to Launch Services asynchronously.
@@ -706,6 +801,8 @@ extension IconGridView: NSCollectionViewDataSource {
             itemsOnCurrentPage.startIndex,
             offsetBy: indexPath.item
         )])
+        // Reapply on every configuration so reused cells cannot inherit a stale highlight.
+        cell.isKeyboardActive = (activeIndex == indexPath.item)
         return cell
     }
 }
