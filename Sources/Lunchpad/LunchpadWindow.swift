@@ -117,7 +117,7 @@ final class LunchpadWindow: NSWindow {
     private let menuBarDockCornerWindow = MenuBarDockCornerWindow()
     private let gridView: IconGridView
     private let rootPageStore: RootPageStore
-    private var isAnimatingClose = false
+    private(set) var isAnimatingClose = false
     private var presentationGeneration = 0
     private var menuBarGradientHeightConstraint: NSLayoutConstraint!
 
@@ -183,8 +183,15 @@ final class LunchpadWindow: NSWindow {
 
     }
 
-    func show() {
-        if let screen = NSScreen.main {
+    /// Presents the launcher on the supplied screen.
+    ///
+    /// All launcher-owned windows (interaction surface, backdrop, menu-bar Dock corner) derive
+    /// their frames, safe-area insets, and grid height from `targetScreen` so they cannot diverge
+    /// during a multi-display activation. Callers that do not supply a target screen retain the
+    /// previous main-screen behavior.
+    func show(on targetScreen: NSScreen? = nil) {
+        let screen = targetScreen ?? NSScreen.main
+        if let screen {
             let contentFrame = presentationFrame(for: screen)
             setFrame(contentFrame, display: true)
             backdropWindow.setFrame(screen.frame, display: true)
