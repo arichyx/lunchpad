@@ -742,7 +742,7 @@ final class IconGridView: NSView {
             configuration: configuration
         ) { _, error in
             if let error {
-                print("⚠️ 无法启动 \(app.name)：\(error)")
+                print("⚠️ Failed to launch \(app.name): \(error)")
             }
         }
     }
