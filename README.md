@@ -14,7 +14,7 @@ app with one click. The name is intentional: Lunchpad is to Launchpad what `reqw
 - Native full-screen AppKit interface
 - Four-finger pinch activation and spread-to-dismiss
 - Paged app grid with two-finger horizontal swiping
-- Search using localized application names
+- Search using localized application names and nonlocalized bundle names
 - Logical folders, including the default Other folder
 - Automatic updates when apps are installed, removed, or replaced
 - Layout that adapts to the Dock on any screen edge
