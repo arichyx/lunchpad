@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var gestureMonitorController: GestureMonitorController?
     private var settingsWindowController: SettingsWindowController?
     private var workspaceActivationObserver: NSObjectProtocol?
+    private var activeSpaceChangeObserver: NSObjectProtocol?
     private var statusItem: NSStatusItem?
     private var statusMenu: NSMenu?
     private var debugLastContactCount = -1
@@ -76,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installGlobalHotKey()
         installMultitouchMonitor()
         installWorkspaceActivationObserver()
+        installActiveSpaceChangeObserver()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -83,6 +85,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         gestureMonitorController?.stop()
         if let workspaceActivationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceActivationObserver)
+        }
+        if let activeSpaceChangeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activeSpaceChangeObserver)
         }
     }
 
@@ -246,6 +251,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Registers a main-queue observer for `NSWorkspace.activeSpaceDidChangeNotification`.
+    ///
+    /// When macOS reports an active Space change while the launcher is visible, Lunchpad dismisses
+    /// through the normal close path. The resident process, monitors, and settings window are
+    /// left running. Hidden state, in-progress close animations, and unrelated notifications are
+    /// ignored. The existing `LunchpadWindow.close` guard keeps the close idempotent if a Space
+    /// change races another dismissal.
+    private func installActiveSpaceChangeObserver() {
+        activeSpaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let window = self.window else { return }
+                let decision = SpaceChangeDismissalPolicy.decision(
+                    isVisible: window.isVisible,
+                    isAnimatingClose: window.isAnimatingClose
+                )
+                guard decision == .dismiss else { return }
+                window.close()
+            }
+        }
+    }
+
     private func installMultitouchMonitor() {
         let controller = GestureMonitorController { [weak self] monitor in
             self?.configureMultitouchMonitor(monitor)
@@ -278,7 +308,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor.onPinch = { [weak self] in
             print("Four-finger pinch completed; showing Lunchpad")
             Task { @MainActor [weak self] in
-                self?.showLunchpad()
+                guard let self else { return }
+                // Resolve the pointer's display on the main actor so AppKit APIs are reached
+                // safely and the screen list cannot change between sampling and presentation.
+                self.showLunchpad(targetScreen: self.screenForPinchActivation())
             }
         }
         monitor.onExpand = { [weak self] in
@@ -307,10 +340,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showLunchpad() {
+        showLunchpad(targetScreen: nil)
+    }
+
+    private func showLunchpad(targetScreen: NSScreen?) {
         guard let window, !window.isVisible else { return }
         settingsWindowController?.window?.orderOut(nil)
         NSApp.activate(ignoringOtherApps: true)
-        window.show()
+        window.show(on: targetScreen)
+    }
+
+    /// Resolves the screen that should host the launcher when a four-finger pinch activates it.
+    ///
+    /// Samples `NSEvent.mouseLocation` on the main actor (the multitouch callback is off-thread)
+    /// and selects the connected display whose frame contains that point. Falls back to
+    /// `NSScreen.main`, then to `nil` (which lets `LunchpadWindow.show` keep its previous
+    /// main-screen behavior) when no screen contains the pointer.
+    private func screenForPinchActivation() -> NSScreen? {
+        let pointerLocation = NSEvent.mouseLocation
+        return ScreenSelectionPolicy.selectedScreen(
+            pointerLocation: pointerLocation,
+            screens: NSScreen.screens,
+            mainScreen: NSScreen.main
+        )
     }
 
     private func dismissLunchpad() {
