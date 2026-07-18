@@ -59,6 +59,23 @@ Lunchpad SHALL display the application name for the user's preferred language wh
 - **WHEN** no localized Info.plist name can be resolved
 - **THEN** Lunchpad falls back through the localized filesystem name, raw bundle display name, raw bundle name, and filename without the `.app` extension
 
+### Requirement: Bundle-provided application search aliases
+
+Lunchpad SHALL retain each application's nonempty raw `CFBundleDisplayName` and `CFBundleName` as
+deduplicated search aliases without changing the localized name displayed to the user.
+
+#### Scenario: Localized and raw bundle names differ
+
+- **WHEN** an application resolves to the localized display name “计算器” and its raw bundle name is
+  “Calculator”
+- **THEN** Lunchpad retains “Calculator” as a search alias and continues displaying “计算器”
+
+#### Scenario: Raw bundle names duplicate the displayed name or each other
+
+- **WHEN** an application's raw bundle display name and bundle name are empty or duplicate another
+  searchable name case-insensitively
+- **THEN** Lunchpad ignores the empty or duplicate values instead of retaining redundant aliases
+
 ### Requirement: Stable filesystem synchronization
 
 Lunchpad SHALL treat FSEvents as invalidation signals and SHALL reconcile the catalog only after the application filesystem reaches a stable state.

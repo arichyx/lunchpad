@@ -401,7 +401,7 @@ final class IconGridView: NSView {
             filteredItems = query.isEmpty
                 ? allItems
                 : allApps
-                    .filter { $0.name.localizedCaseInsensitiveContains(query) }
+                    .filter { $0.matchesSearchQuery(query) }
                     .map(LunchpadItem.app)
         }
 
@@ -677,7 +677,7 @@ final class IconGridView: NSView {
         filteredItems = query.isEmpty
             ? allItems
             : allApps
-                .filter { $0.name.localizedCaseInsensitiveContains(query) }
+                .filter { $0.matchesSearchQuery(query) }
                 .map(LunchpadItem.app)
         currentPage = 0
         reloadPage(animated: true)

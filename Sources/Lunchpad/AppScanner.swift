@@ -8,6 +8,61 @@ struct AppItem {
     let url: URL
     let creationDate: Date?
     let modificationDate: Date?
+    /// Trimmed, case-insensitively deduplicated raw `CFBundleDisplayName` and `CFBundleName`
+    /// values retained for in-memory search. The localized display name is never included here.
+    let searchAliases: [String]
+
+    init(
+        identifier: String,
+        bundleIdentifier: String?,
+        name: String,
+        url: URL,
+        creationDate: Date?,
+        modificationDate: Date?,
+        searchAliases: [String] = []
+    ) {
+        self.identifier = identifier
+        self.bundleIdentifier = bundleIdentifier
+        self.name = name
+        self.url = url
+        self.creationDate = creationDate
+        self.modificationDate = modificationDate
+        self.searchAliases = searchAliases
+    }
+
+    /// Returns true when the trimmed query is a case-insensitive substring of the displayed name
+    /// or any of the application's search aliases. An empty query matches every application.
+    func matchesSearchQuery(_ trimmedQuery: String) -> Bool {
+        if name.localizedCaseInsensitiveContains(trimmedQuery) {
+            return true
+        }
+        return searchAliases.contains { $0.localizedCaseInsensitiveContains(trimmedQuery) }
+    }
+
+    /// Builds the trimmed, case-insensitively deduplicated search alias list from raw bundle name
+    /// values. The displayed name is treated as already-present so aliases that duplicate it are
+    /// dropped. Insertion order (`CFBundleDisplayName` then `CFBundleName`) is preserved so the
+    /// resulting list is deterministic for catalog signatures.
+    static func searchAliases(
+        displayName: String,
+        rawBundleDisplayName: String?,
+        rawBundleName: String?
+    ) -> [String] {
+        var seen: Set<String> = []
+        if !displayName.isEmpty {
+            seen.insert(displayName.lowercased())
+        }
+
+        var aliases: [String] = []
+        for candidate in [rawBundleDisplayName, rawBundleName] {
+            guard let candidate else { continue }
+            let key = candidate.lowercased()
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            aliases.append(candidate)
+        }
+        return aliases
+    }
 }
 
 /// A logical Lunchpad folder with no relationship to a Finder directory.
@@ -144,6 +199,16 @@ final class AppScanner {
             for: canonicalURL,
             rawInfoDictionary: info
         )
+        // Capture trimmed raw bundle names before localization fallbacks collapse them into
+        // the displayed name. Empty values and case-insensitive duplicates of the displayed
+        // name or each other are dropped so the common case avoids redundant comparisons.
+        let rawBundleDisplayName = trimmedNonEmptyString(info["CFBundleDisplayName"])
+        let rawBundleName = trimmedNonEmptyString(info["CFBundleName"])
+        let searchAliases = AppItem.searchAliases(
+            displayName: displayName,
+            rawBundleDisplayName: rawBundleDisplayName,
+            rawBundleName: rawBundleName
+        )
 
         let identifier = bundleIdentifier.map { "bundle:\($0.lowercased())" }
             ?? "path:\(canonicalURL.path)"
@@ -156,7 +221,8 @@ final class AppScanner {
             name: displayName,
             url: canonicalURL,
             creationDate: resourceValues?.creationDate,
-            modificationDate: resourceValues?.contentModificationDate
+            modificationDate: resourceValues?.contentModificationDate,
+            searchAliases: searchAliases
         )
     }
 
@@ -164,24 +230,33 @@ final class AppScanner {
         _ items: [LunchpadItem],
         from discovered: [DiscoveredApplication]
     ) -> [LunchpadItem] {
-        let dates: [String: (creation: Date?, modification: Date?)] = Dictionary(
+        // Aliases are derived scanner output; copy them from discovered items onto items loaded
+        // from SQLite just as the filesystem dates are copied, so a SQLite-only read does not
+        // need to persist rebuildable alias metadata.
+        let metadata: [String: (
+            creation: Date?,
+            modification: Date?,
+            aliases: [String]
+        )] = Dictionary(
             uniqueKeysWithValues: discovered.map {
                 ($0.item.identifier, (
                     creation: $0.item.creationDate,
-                    modification: $0.item.modificationDate
+                    modification: $0.item.modificationDate,
+                    aliases: $0.item.searchAliases
                 ))
             }
         )
 
         func enriched(_ app: AppItem) -> AppItem {
-            let appDates = dates[app.identifier]
+            let appMetadata = metadata[app.identifier]
             return AppItem(
                 identifier: app.identifier,
                 bundleIdentifier: app.bundleIdentifier,
                 name: app.name,
                 url: app.url,
-                creationDate: appDates?.creation,
-                modificationDate: appDates?.modification
+                creationDate: appMetadata?.creation,
+                modificationDate: appMetadata?.modification,
+                searchAliases: appMetadata?.aliases ?? []
             )
         }
 
@@ -290,6 +365,14 @@ final class AppScanner {
             return nil
         }
         return value
+    }
+
+    /// Returns the trimmed value, or nil when empty after trimming. Used for search aliases,
+    /// where leading or trailing whitespace should not survive into the matcher.
+    private func trimmedNonEmptyString(_ value: Any?) -> String? {
+        guard let value = value as? String else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func isInsideUtilities(_ appURL: URL) -> Bool {

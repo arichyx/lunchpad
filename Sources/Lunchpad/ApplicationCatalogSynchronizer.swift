@@ -218,7 +218,9 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
         return nil
     }
 
-    /// Includes order, display names, paths, and folder assignments; icons load on demand.
+    /// Includes order, display names, paths, folder assignments, and search aliases; icons load
+    /// on demand. Aliases are joined in deterministic insertion order so an alias-only bundle
+    /// update refreshes an active search.
     private func catalogSignature(_ items: [LunchpadItem]) -> [String] {
         items.flatMap { item -> [String] in
             switch item {
@@ -226,7 +228,8 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
                 return [
                     "app\u{0}\(app.identifier)\u{0}\(app.name)\u{0}\(app.url.path)"
                         + "\u{0}\(app.creationDate?.timeIntervalSinceReferenceDate ?? -1)"
-                        + "\u{0}\(app.modificationDate?.timeIntervalSinceReferenceDate ?? -1)",
+                        + "\u{0}\(app.modificationDate?.timeIntervalSinceReferenceDate ?? -1)"
+                        + "\u{0}\(app.searchAliases.joined(separator: "\u{1}"))",
                 ]
             case .folder(let folder):
                 return [
@@ -236,6 +239,7 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
                         + "\u{0}\($0.url.path)"
                         + "\u{0}\($0.creationDate?.timeIntervalSinceReferenceDate ?? -1)"
                         + "\u{0}\($0.modificationDate?.timeIntervalSinceReferenceDate ?? -1)"
+                        + "\u{0}\($0.searchAliases.joined(separator: "\u{1}"))"
                 }
             }
         }
