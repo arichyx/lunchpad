@@ -13,10 +13,10 @@ enum LunchpadLayoutStoreError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .sqlite(let message): message
-        case .invalidFolderName: "目录名称不能为空"
-        case .folderNotFound: "找不到指定目录"
-        case .applicationNotFound: "找不到指定应用"
-        case .protectedSystemFolder: "系统预设目录不能删除或重命名"
+        case .invalidFolderName: "Folder name must not be empty"
+        case .folderNotFound: "Folder not found"
+        case .applicationNotFound: "Application not found"
+        case .protectedSystemFolder: "System folders cannot be deleted or renamed"
         }
     }
 }
@@ -67,7 +67,7 @@ final class LunchpadLayoutStore {
         )
         guard result == SQLITE_OK else {
             let message = database.map { String(cString: sqlite3_errmsg($0)) }
-                ?? "无法打开布局数据库"
+                ?? "Unable to open layout database"
             if let database { sqlite3_close(database) }
             database = nil
             throw LunchpadLayoutStoreError.sqlite(message)
@@ -270,7 +270,7 @@ final class LunchpadLayoutStore {
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first else {
-            throw LunchpadLayoutStoreError.sqlite("找不到 Application Support 目录")
+            throw LunchpadLayoutStoreError.sqlite("Application Support directory not found")
         }
         return applicationSupport
             .appendingPathComponent("com.arichyx.Lunchpad", isDirectory: true)
@@ -536,7 +536,7 @@ final class LunchpadLayoutStore {
 
     private func prepare(_ sql: String) throws -> OpaquePointer {
         guard let database else {
-            throw LunchpadLayoutStoreError.sqlite("布局数据库尚未打开")
+            throw LunchpadLayoutStoreError.sqlite("Layout database is not open")
         }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
@@ -576,7 +576,7 @@ final class LunchpadLayoutStore {
 
     private func sqliteError() -> LunchpadLayoutStoreError {
         guard let database else {
-            return .sqlite("布局数据库尚未打开")
+            return .sqlite("Layout database is not open")
         }
         return .sqlite(String(cString: sqlite3_errmsg(database)))
     }

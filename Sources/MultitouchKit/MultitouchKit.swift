@@ -388,11 +388,11 @@ public enum MultitouchMonitorError: Error, CustomStringConvertible {
     public var description: String {
         switch self {
         case .serviceNotFound:
-            return "找不到 AppleMultitouchDevice"
+            return "AppleMultitouchDevice not found"
         case let .call(name, result):
-            return "\(name) 失败（0x\(String(UInt32(bitPattern: result), radix: 16))）"
+            return "\(name) failed (0x\(String(UInt32(bitPattern: result), radix: 16)))"
         case .invalidQueueAddress:
-            return "驱动返回了无效的数据队列地址"
+            return "Driver returned an invalid data queue address"
         }
     }
 }
@@ -497,7 +497,7 @@ public final class MultitouchMonitor: @unchecked Sendable {
             IOConnectUnmapMemory(openedConnection, 0, mach_task_self_, queueAddress)
             mach_port_destruct(mach_task_self_, port, 0, 0)
             IOServiceClose(openedConnection)
-            throw MultitouchMonitorError.call("启动触控数据流", result)
+            throw MultitouchMonitorError.call("Start touch data stream", result)
         }
 
         let sensorWidth = Self.numberProperty(service, key: "Sensor Surface Width") ?? 15_600
@@ -569,7 +569,7 @@ public final class MultitouchMonitor: @unchecked Sendable {
             let result = IODataQueueWaitForAvailableData(dataQueue, port)
             guard result == KERN_SUCCESS else {
                 if isRunning {
-                    onError?(.call("等待触控数据", result))
+                    onError?(.call("Wait for touch data", result))
                 }
                 break
             }
@@ -581,7 +581,7 @@ public final class MultitouchMonitor: @unchecked Sendable {
                     IODataQueueDequeue(dataQueue, buffer.baseAddress, &size)
                 }
                 guard dequeueResult == KERN_SUCCESS else {
-                    onError?(.call("读取触控数据", dequeueResult))
+                    onError?(.call("Read touch data", dequeueResult))
                     break
                 }
 

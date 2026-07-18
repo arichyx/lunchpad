@@ -47,12 +47,12 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
         window = win
 
         print("=== GestureProbe v2 ===")
-        print("透明窗口已铺满(会接住手势)。请依次做、每个之间停一下:")
-        print("  1) 两指捏合缩放(像放大照片)")
-        print("  2) 四指捏合(Lunchpad 手势)")
-        print("  3) 双指双击")
-        print("  4) 两指滚动")
-        print("观察 [LOCAL] 打印。Ctrl+C 退出。")
+        print("Transparent window is full-screen (it will intercept gestures). Try these in order, pausing between each:")
+        print("  1) Two-finger pinch to zoom (like zooming a photo)")
+        print("  2) Four-finger pinch (Lunchpad gesture)")
+        print("  3) Two-finger double tap")
+        print("  4) Two-finger scroll")
+        print("Watch the [LOCAL] output. Press Ctrl+C to exit.")
         print("--------------------")
     }
 }

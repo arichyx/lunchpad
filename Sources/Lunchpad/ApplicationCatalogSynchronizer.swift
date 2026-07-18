@@ -83,7 +83,7 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
                 return items
             } catch {
                 // Preserve the flat-layout fallback after initial database setup fails.
-                print("⚠️ 布局数据库不可用，使用平铺布局：\(error)")
+                print("⚠️ Layout database unavailable, using flat layout: \(error)")
                 layoutStore = nil
                 let items = scanner.scanApplicationsFlat()
                 lastCatalogSignature = catalogSignature(items)
@@ -115,7 +115,7 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
                 self.pendingIconInvalidationPaths.formUnion(changedBundlePaths)
             }
             if batch.requiresFullRescan {
-                print("应用目录事件丢失或根目录变化，将执行恢复性全量扫描")
+                print("Application directory events lost or root changed; performing recovery full scan")
             }
             if batch.requiresStreamRestart {
                 // Rebuild monitoring from the nearest existing parent after a root moves or disappears.
@@ -123,7 +123,7 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
                 do {
                     try self.monitor.start()
                 } catch {
-                    print("⚠️ 重建应用目录监听失败：\(error)")
+                    print("⚠️ Failed to rebuild application directory monitor: \(error)")
                 }
             }
             self.scheduleFirstSnapshot(for: generation, after: self.quietDelay)
@@ -188,7 +188,7 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
         } catch {
             // A database error must not crash the resident process. Preserve the current UI
             // and retry after the next directory event.
-            print("⚠️ 更新应用目录失败：\(error)")
+            print("⚠️ Failed to update application catalog: \(error)")
         }
     }
 

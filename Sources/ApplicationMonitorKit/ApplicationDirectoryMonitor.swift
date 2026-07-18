@@ -66,11 +66,11 @@ public enum ApplicationDirectoryMonitorError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .noExistingRoots:
-            "没有可监听的应用目录"
+            "No application directories available to monitor"
         case .cannotCreateStream:
-            "无法创建 FSEvents 监听流"
+            "Unable to create FSEvents monitor stream"
         case .cannotStartStream:
-            "无法启动 FSEvents 监听流"
+            "Unable to start FSEvents monitor stream"
         }
     }
 }

@@ -23,11 +23,11 @@ monitor.onEvents = { batch in
 
 do {
     try monitor.start()
-    print("正在监听：")
+    print("Monitoring:")
     roots.forEach { print("  \($0.path)") }
     fflush(stdout)
     RunLoop.main.run()
 } catch {
-    fputs("启动监听失败：\(error.localizedDescription)\n", stderr)
+    fputs("Failed to start monitoring: \(error.localizedDescription)\n", stderr)
     exit(EXIT_FAILURE)
 }

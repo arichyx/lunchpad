@@ -30,9 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let openedStore = try LunchpadLayoutStore()
             store = openedStore
-            print("布局数据库：\(openedStore.databaseURL.path)")
+            print("Layout database: \(openedStore.databaseURL.path)")
         } catch {
-            print("⚠️ 布局数据库不可用，使用平铺布局：\(error)")
+            print("⚠️ Layout database unavailable, using flat layout: \(error)")
             store = nil
         }
 
@@ -51,9 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             // Start monitoring before the initial scan to cover changes that race with startup.
             try synchronizer.start()
-            print("应用目录监听已启动")
+            print("Application directory monitor started")
         } catch {
-            print("⚠️ 应用目录监听启动失败：\(error)")
+            print("⚠️ Failed to start application directory monitor: \(error)")
         }
         catalogSynchronizer = synchronizer
 
@@ -65,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if case .folder = item { return count + 1 }
             return count
         }
-        print("扫描完成：\(appCount) 个应用，\(folderCount) 个文件夹")
+        print("Scan complete: \(appCount) apps, \(folderCount) folders")
         window = LunchpadWindow(
             items: presentedItems(from: items),
             localizer: localizer,
@@ -377,8 +377,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ) {
         canonicalItems = items
         let appCount = items.reduce(0) { $0 + $1.apps.count }
-        let reason = catalogChanged ? "目录变化" : "应用内容变化"
-        print("应用目录已同步（\(reason)）：\(appCount) 个应用")
+        let reason = catalogChanged ? "catalog change" : "app content change"
+        print("Application catalog synchronized (\(reason)): \(appCount) apps")
         window?.update(
             items: presentedItems(from: items),
             catalogChanged: catalogChanged,

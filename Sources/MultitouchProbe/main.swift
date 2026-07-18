@@ -44,7 +44,7 @@ monitor.onFrame = { frame in
 }
 
 monitor.onPinch = {
-    print("🚀 检测到四指向内捏合")
+    print("🚀 Detected four-finger inward pinch")
 }
 
 monitor.onError = { error in
@@ -68,9 +68,9 @@ func meanPairwiseDistance(_ contacts: [MultitouchContact]) -> Double {
 
 do {
     try monitor.start()
-    print("AppleMultitouchDevice 数据流已启动。触摸触控板，Ctrl+C 退出。")
+    print("AppleMultitouchDevice stream started. Touch the trackpad; press Ctrl+C to exit.")
     RunLoop.main.run()
 } catch {
-    print("❌ 启动失败：\(error)")
+    print("❌ Failed to start: \(error)")
     exit(EXIT_FAILURE)
 }
