@@ -124,6 +124,13 @@ final class AppIconCell: NSCollectionViewItem {
     private let iconView = NSImageView()
     private let folderIconView = FolderIconView()
     private let label = NSTextField(labelWithString: "")
+    private let keyboardFocusLayer = CALayer()
+
+    /// A rounded translucent highlight behind the icon that composes with pressed alpha feedback.
+    /// Setting it always re-applies the value, so reused cells cannot retain a stale active state.
+    var isKeyboardActive: Bool = false {
+        didSet { applyKeyboardActiveAppearance() }
+    }
 
     override func loadView() {
         let container = NSView()
@@ -132,10 +139,8 @@ final class AppIconCell: NSCollectionViewItem {
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.imageAlignment = .alignCenter
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(iconView)
 
         folderIconView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(folderIconView)
 
         label.font = .systemFont(ofSize: 12, weight: .regular)
         label.textColor = .white
@@ -145,6 +150,19 @@ final class AppIconCell: NSCollectionViewItem {
         label.cell?.truncatesLastVisibleLine = true
         label.cell?.wraps = true
         label.translatesAutoresizingMaskIntoConstraints = false
+
+        // Insert the focus layer behind the icon so it covers applications and folders identically
+        // without replacing the pressed-alpha feedback applied directly to the cell's view.
+        keyboardFocusLayer.cornerRadius = 18
+        keyboardFocusLayer.cornerCurve = .continuous
+        keyboardFocusLayer.backgroundColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        keyboardFocusLayer.borderColor = NSColor.white.withAlphaComponent(0.42).cgColor
+        keyboardFocusLayer.borderWidth = 1
+        keyboardFocusLayer.opacity = 0
+
+        container.layer?.addSublayer(keyboardFocusLayer)
+        container.addSubview(iconView)
+        container.addSubview(folderIconView)
         container.addSubview(label)
 
         NSLayoutConstraint.activate([
@@ -167,6 +185,19 @@ final class AppIconCell: NSCollectionViewItem {
         view = container
     }
 
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        // Align the backing layer frame with the icon area after Auto Layout settles.
+        let iconFrame = iconView.frame
+        let padding: CGFloat = 8
+        keyboardFocusLayer.frame = NSRect(
+            x: iconFrame.minX - padding,
+            y: iconFrame.minY - padding,
+            width: iconFrame.width + padding * 2,
+            height: iconFrame.height + padding * 2
+        )
+    }
+
     func configure(with item: LunchpadItem) {
         label.stringValue = item.name
 
@@ -181,5 +212,13 @@ final class AppIconCell: NSCollectionViewItem {
             folderIconView.configure(with: Array(folder.apps.prefix(9)))
             folderIconView.isHidden = false
         }
+
+        // Apply the current keyboard-active flag on every configuration so reused cells
+        // cannot carry the previous item's highlight.
+        applyKeyboardActiveAppearance()
+    }
+
+    private func applyKeyboardActiveAppearance() {
+        keyboardFocusLayer.opacity = isKeyboardActive ? 1 : 0
     }
 }

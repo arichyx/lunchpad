@@ -5,6 +5,12 @@ final class LunchpadSearchField: NSView, NSTextFieldDelegate {
     var onTextChange: ((String) -> Void)?
     var onCancel: (() -> Void)?
     var onSubmit: (() -> Void)?
+    /// Returns `true` when the grid consumed the directional command (Down Arrow begins result
+    /// navigation; Right Arrow at the end of the query also enters navigation at the second result;
+    /// all four arrows move once an item is active). Returns `false` to let the field editor keep
+    /// its normal caret behavior, which preserves left/right caret movement before any result has
+    /// become active. The second callback parameter is `caretAtEndOfText` from the field editor.
+    var onNavigateDirection: ((GridNavigationDirection, Bool) -> Bool)?
 
     private let searchIcon = NSImageView()
     private let textField = NSTextField()
@@ -144,6 +150,36 @@ final class LunchpadSearchField: NSView, NSTextFieldDelegate {
             onSubmit?()
             return true
         }
+        if let direction = Self.direction(for: commandSelector) {
+            let caretAtEnd = Self.caretAtEndOfText(in: textView)
+            if let handler = onNavigateDirection, handler(direction, caretAtEnd) {
+                return true
+            }
+        }
         return false
+    }
+
+    private static func direction(for commandSelector: Selector) -> GridNavigationDirection? {
+        switch commandSelector {
+        case #selector(NSResponder.moveUp(_:)):
+            return .up
+        case #selector(NSResponder.moveDown(_:)):
+            return .down
+        case #selector(NSResponder.moveLeft(_:)):
+            return .left
+        case #selector(NSResponder.moveRight(_:)):
+            return .right
+        default:
+            return nil
+        }
+    }
+
+    /// A caret (zero-length selection) located exactly at the end of the query text. A non-empty
+    /// selection never counts, so Right Arrow first collapses the selection before entry navigation.
+    private static func caretAtEndOfText(in textView: NSTextView) -> Bool {
+        let selectedRange = textView.selectedRange
+        guard selectedRange.length == 0 else { return false }
+        let textLength = (textView.string as NSString).length
+        return selectedRange.location == textLength
     }
 }

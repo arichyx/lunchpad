@@ -419,17 +419,36 @@ final class LunchpadWindow: NSWindow {
         gridView.handleScrollWheel(event)
     }
 
-    // Escape (key code 53) closes the current level or window.
+    // Escape (key code 53) closes the current level or window. Plain arrow keys move the active
+    // grid item within the current page; they no longer page between pages. Return and keypad Enter
+    // activate the active item or the first search result.
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 {
+        switch event.keyCode {
+        case 53: // Escape
             if !gridView.dismissOpenFolder() {
                 close()
             }
-        } else if event.keyCode == 123 {
-            gridView.showPreviousPage()
-        } else if event.keyCode == 124 {
-            gridView.showNextPage()
-        } else {
+        case 123: // Left arrow
+            if !gridView.handleNavigationCommand(.left) {
+                super.keyDown(with: event)
+            }
+        case 124: // Right arrow
+            if !gridView.handleNavigationCommand(.right) {
+                super.keyDown(with: event)
+            }
+        case 125: // Down arrow
+            if !gridView.handleNavigationCommand(.down) {
+                super.keyDown(with: event)
+            }
+        case 126: // Up arrow
+            if !gridView.handleNavigationCommand(.up) {
+                super.keyDown(with: event)
+            }
+        case 36, 76: // Return, keypad Enter
+            if !gridView.activateActiveItemOrFirstSearchResult() {
+                super.keyDown(with: event)
+            }
+        default:
             super.keyDown(with: event)
         }
     }
