@@ -123,6 +123,23 @@ final class ShowDesktopStateDetectorTests: XCTestCase {
         )
     }
 
+    func testWindowSnapshotsResolveApplicationPolicyOncePerOwnerProcess() {
+        let entries = [
+            windowEntry(processIdentifier: 100, bounds: display),
+            windowEntry(processIdentifier: 100, bounds: display.offsetBy(dx: 100, dy: 100)),
+            windowEntry(processIdentifier: 200, bounds: display),
+        ]
+        var resolutionCounts: [pid_t: Int] = [:]
+
+        let snapshots = ShowDesktopStateDetector.windowSnapshots(from: entries) {
+            resolutionCounts[$0, default: 0] += 1
+            return $0 == 100
+        }
+
+        XCTAssertEqual(resolutionCounts, [100: 1, 200: 1])
+        XCTAssertEqual(snapshots.map(\.isRegularApplication), [true, true, false])
+    }
+
     private func window(
         processIdentifier: pid_t = 100,
         bounds: CGRect,
@@ -135,5 +152,17 @@ final class ShowDesktopStateDetectorTests: XCTestCase {
             bounds: bounds,
             isRegularApplication: isRegularApplication
         )
+    }
+
+    private func windowEntry(
+        processIdentifier: pid_t,
+        bounds: CGRect
+    ) -> [CFString: Any] {
+        [
+            kCGWindowOwnerPID: NSNumber(value: processIdentifier),
+            kCGWindowLayer: NSNumber(value: 0),
+            kCGWindowAlpha: NSNumber(value: 1),
+            kCGWindowBounds: bounds.dictionaryRepresentation,
+        ]
     }
 }

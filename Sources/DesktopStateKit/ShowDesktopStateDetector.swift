@@ -73,7 +73,7 @@ public struct ShowDesktopStateDetector: Sendable {
             )
         }
 
-        let windows = entries.compactMap(Self.windowSnapshot)
+        let windows = Self.windowSnapshots(from: entries)
         return evaluate(
             windows: windows,
             displayBounds: displays,
@@ -165,8 +165,26 @@ public struct ShowDesktopStateDetector: Sendable {
         return displays.prefix(Int(displayCount)).map(CGDisplayBounds)
     }
 
+    static func windowSnapshots(
+        from entries: [[CFString: Any]],
+        regularApplicationResolver: (pid_t) -> Bool = {
+            NSRunningApplication(processIdentifier: $0)?.activationPolicy == .regular
+        }
+    ) -> [DesktopWindowSnapshot] {
+        var regularApplicationCache: [pid_t: Bool] = [:]
+        return entries.compactMap {
+            windowSnapshot(
+                from: $0,
+                regularApplicationCache: &regularApplicationCache,
+                regularApplicationResolver: regularApplicationResolver
+            )
+        }
+    }
+
     private static func windowSnapshot(
-        from entry: [CFString: Any]
+        from entry: [CFString: Any],
+        regularApplicationCache: inout [pid_t: Bool],
+        regularApplicationResolver: (pid_t) -> Bool
     ) -> DesktopWindowSnapshot? {
         guard let processIdentifier = entry[kCGWindowOwnerPID] as? NSNumber,
               let layer = entry[kCGWindowLayer] as? NSNumber,
@@ -178,14 +196,21 @@ public struct ShowDesktopStateDetector: Sendable {
             return nil
         }
 
+        let ownerProcessIdentifier = processIdentifier.int32Value
+        let isRegularApplication: Bool
+        if let cachedValue = regularApplicationCache[ownerProcessIdentifier] {
+            isRegularApplication = cachedValue
+        } else {
+            isRegularApplication = regularApplicationResolver(ownerProcessIdentifier)
+            regularApplicationCache[ownerProcessIdentifier] = isRegularApplication
+        }
+
         return DesktopWindowSnapshot(
-            ownerProcessIdentifier: processIdentifier.int32Value,
+            ownerProcessIdentifier: ownerProcessIdentifier,
             layer: layer.intValue,
             alpha: alpha.doubleValue,
             bounds: bounds,
-            isRegularApplication: NSRunningApplication(
-                processIdentifier: processIdentifier.int32Value
-            )?.activationPolicy == .regular
+            isRegularApplication: isRegularApplication
         )
     }
 }

@@ -574,37 +574,42 @@ public final class MultitouchMonitor: @unchecked Sendable {
                 break
             }
 
-            while isRunning && IODataQueueDataAvailable(dataQueue) {
-                var bytes = [UInt8](repeating: 0, count: maximumPacketSize)
-                var size = UInt32(bytes.count)
-                let dequeueResult = bytes.withUnsafeMutableBytes { buffer in
-                    IODataQueueDequeue(dataQueue, buffer.baseAddress, &size)
-                }
-                guard dequeueResult == KERN_SUCCESS else {
-                    onError?(.call("Read touch data", dequeueResult))
-                    break
-                }
+            // This loop is one long-lived dispatch work item, so libdispatch cannot drain its
+            // autorelease pool until monitoring stops. Bound AppKit and Core Foundation
+            // temporaries created by callbacks to each batch of queued reports.
+            autoreleasepool {
+                while isRunning && IODataQueueDataAvailable(dataQueue) {
+                    var bytes = [UInt8](repeating: 0, count: maximumPacketSize)
+                    var size = UInt32(bytes.count)
+                    let dequeueResult = bytes.withUnsafeMutableBytes { buffer in
+                        IODataQueueDequeue(dataQueue, buffer.baseAddress, &size)
+                    }
+                    guard dequeueResult == KERN_SUCCESS else {
+                        onError?(.call("Read touch data", dequeueResult))
+                        break
+                    }
 
-                bytes.removeSubrange(Int(size)..<bytes.count)
-                guard let frame = parser.parse(bytes) else { continue }
-                let pinchDetected = recognizer.process(frame)
-                let expandDetected = expandRecognizer.process(frame)
-                onFrame?(frame)
-                let completionAction = completionGate.process(
-                    frame,
-                    pinchDetected: pinchDetected,
-                    expandDetected: expandDetected
-                ) { [weak self] in
-                    self?.shouldActivatePinch?() ?? true
-                }
-                if let completionAction {
-                    switch completionAction {
-                    case .activate:
-                        onPinch?()
-                    case .suppress:
-                        onPinchSuppressed?()
-                    case .dismiss:
-                        onExpand?()
+                    bytes.removeSubrange(Int(size)..<bytes.count)
+                    guard let frame = parser.parse(bytes) else { continue }
+                    let pinchDetected = recognizer.process(frame)
+                    let expandDetected = expandRecognizer.process(frame)
+                    onFrame?(frame)
+                    let completionAction = completionGate.process(
+                        frame,
+                        pinchDetected: pinchDetected,
+                        expandDetected: expandDetected
+                    ) { [weak self] in
+                        self?.shouldActivatePinch?() ?? true
+                    }
+                    if let completionAction {
+                        switch completionAction {
+                        case .activate:
+                            onPinch?()
+                        case .suppress:
+                            onPinchSuppressed?()
+                        case .dismiss:
+                            onExpand?()
+                        }
                     }
                 }
             }
