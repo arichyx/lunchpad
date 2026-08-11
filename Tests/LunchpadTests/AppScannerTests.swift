@@ -1,8 +1,69 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import Lunchpad
 
 final class AppScannerTests: XCTestCase {
+    func testDiscoveryIncludesHiddenTopLevelApplicationSymlinkWithoutTraversingHiddenDirectories() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "LunchpadScannerHiddenSymlinkTests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let root = directory.appendingPathComponent("Applications", isDirectory: true)
+        let linkedAppURL = directory.appendingPathComponent(
+            "SystemApplications/Linked.app",
+            isDirectory: true
+        )
+        try writeFixtureApp(
+            at: linkedAppURL,
+            bundleIdentifier: "test.hidden-link",
+            executableName: "Linked",
+            bundleDisplayName: "Linked",
+            bundleName: "Linked"
+        )
+
+        let hiddenDirectoryAppURL = root.appendingPathComponent(
+            ".staging/Hidden.app",
+            isDirectory: true
+        )
+        try writeFixtureApp(
+            at: hiddenDirectoryAppURL,
+            bundleIdentifier: "test.hidden-directory",
+            executableName: "Hidden",
+            bundleDisplayName: "Hidden",
+            bundleName: "Hidden"
+        )
+
+        let linkURL = root.appendingPathComponent("Linked.app")
+        try FileManager.default.createSymbolicLink(
+            at: linkURL,
+            withDestinationURL: linkedAppURL
+        )
+        let flagResult = linkURL.path.withCString {
+            lchflags($0, UInt32(UF_HIDDEN))
+        }
+        XCTAssertEqual(flagResult, 0)
+        XCTAssertEqual(
+            try linkURL.resourceValues(forKeys: [.isHiddenKey]).isHidden,
+            true
+        )
+
+        let discovered = AppScanner(roots: [root]).discoverApplications()
+
+        let linkedApp = try XCTUnwrap(discovered.first {
+            $0.item.bundleIdentifier == "test.hidden-link"
+        })
+        XCTAssertEqual(
+            linkedApp.item.url,
+            linkedAppURL.resolvingSymlinksInPath().standardizedFileURL
+        )
+        XCTAssertFalse(discovered.contains {
+            $0.item.bundleIdentifier == "test.hidden-directory"
+        })
+    }
+
     func testDiscoveryReadsBundleCreationAndModificationDates() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "LunchpadScannerTests-\(UUID().uuidString)",

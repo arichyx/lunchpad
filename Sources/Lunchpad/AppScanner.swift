@@ -386,25 +386,52 @@ final class AppScanner {
     private func applicationBundleURLs() -> [URL] {
         var urls: [URL] = []
         for root in roots where FileManager.default.fileExists(atPath: root.path) {
-            guard let enumerator = FileManager.default.enumerator(
+            if let enumerator = FileManager.default.enumerator(
                 at: root,
                 includingPropertiesForKeys: [.isDirectoryKey, .isApplicationKey],
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
-            ) else {
-                continue
+            ) {
+                for case let url as URL in enumerator {
+                    guard url.pathExtension.localizedCaseInsensitiveCompare("app") == .orderedSame else {
+                        continue
+                    }
+                    // Always skip package contents. The snapshot records the key files required
+                    // to determine bundle completeness.
+                    enumerator.skipDescendants()
+                    urls.append(url.resolvingSymlinksInPath().standardizedFileURL)
+                }
             }
 
-            for case let url as URL in enumerator {
-                guard url.pathExtension.localizedCaseInsensitiveCompare("app") == .orderedSame else {
-                    continue
+            // macOS may expose a system application as a hidden top-level symlink in
+            // /Applications. Include application aliases from the root itself without walking
+            // hidden directories, then let makeApp(at:) perform the usual completeness checks.
+            for url in topLevelApplicationSymlinkURLs(in: root) {
+                let canonicalURL = url.resolvingSymlinksInPath().standardizedFileURL
+                if !urls.contains(canonicalURL) {
+                    urls.append(canonicalURL)
                 }
-                // Always skip package contents. The snapshot records the key files required
-                // to determine bundle completeness.
-                enumerator.skipDescendants()
-                urls.append(url.resolvingSymlinksInPath().standardizedFileURL)
             }
         }
         return urls
+    }
+
+    private func topLevelApplicationSymlinkURLs(in root: URL) -> [URL] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isSymbolicLinkKey],
+            options: []
+        ) else {
+            return []
+        }
+
+        return entries.filter { url in
+            guard url.pathExtension.localizedCaseInsensitiveCompare("app") == .orderedSame else {
+                return false
+            }
+            return (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+        }.sorted {
+            $0.path.localizedStandardCompare($1.path) == .orderedAscending
+        }
     }
 
     private func makeFingerprint(at appURL: URL) -> ApplicationBundleFingerprint {
