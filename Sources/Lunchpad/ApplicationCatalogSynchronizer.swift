@@ -1,6 +1,11 @@
 import ApplicationMonitorKit
 import Foundation
 
+struct InitialCatalogLoad {
+    let items: [LunchpadItem]
+    let usesPersistentLayout: Bool
+}
+
 /// Coalesces frequent, non-transactional filesystem events into a stable Lunchpad catalog.
 final class ApplicationCatalogSynchronizer: @unchecked Sendable {
     /// Bool reports catalog metadata changes. Set contains icon paths to invalidate; nil means all.
@@ -75,19 +80,22 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
     }
 
     /// Initial loading uses the same serial queue to avoid concurrent SQLite reconciliation.
-    func loadInitialCatalog() -> [LunchpadItem] {
+    func loadInitialCatalog() -> InitialCatalogLoad {
         queue.sync {
             do {
                 let items = try loadCatalog()
                 lastCatalogSignature = catalogSignature(items)
-                return items
+                return InitialCatalogLoad(
+                    items: items,
+                    usesPersistentLayout: layoutStore != nil
+                )
             } catch {
                 // Preserve the flat-layout fallback after initial database setup fails.
                 print("⚠️ Layout database unavailable, using flat layout: \(error)")
                 layoutStore = nil
                 let items = scanner.scanApplicationsFlat()
                 lastCatalogSignature = catalogSignature(items)
-                return items
+                return InitialCatalogLoad(items: items, usesPersistentLayout: false)
             }
         }
     }

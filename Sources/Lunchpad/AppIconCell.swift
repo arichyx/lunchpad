@@ -199,6 +199,8 @@ final class AppIconCell: NSCollectionViewItem {
     }
 
     func configure(with item: LunchpadItem) {
+        // Reused collection items must not inherit a transfer preview's hidden label or opacity.
+        setCrossPageTransferAppearance(false, animated: false)
         label.stringValue = item.name
 
         switch item {
@@ -216,6 +218,18 @@ final class AppIconCell: NSCollectionViewItem {
         // Apply the current keyboard-active flag on every configuration so reused cells
         // cannot carry the previous item's highlight.
         applyKeyboardActiveAppearance()
+    }
+
+    /// A displaced item remains identifiable at the screen edge, but its reduced opacity and
+    /// hidden name distinguish the transfer hint from another occupied grid slot.
+    func setCrossPageTransferAppearance(_ isActive: Bool, animated: Bool) {
+        label.isHidden = isActive
+        let alphaValue: CGFloat = isActive ? 0.42 : 1
+        if animated {
+            view.animator().alphaValue = alphaValue
+        } else {
+            view.alphaValue = alphaValue
+        }
     }
 
     private func applyKeyboardActiveAppearance() {

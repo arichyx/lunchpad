@@ -249,6 +249,40 @@ final class AppScannerTests: XCTestCase {
         )
     }
 
+    func testApplyingRuntimeMetadataRestoresLayoutOnlyReloadMetadata() {
+        let creationDate = Date(timeIntervalSince1970: 100)
+        let modificationDate = Date(timeIntervalSince1970: 200)
+        let sourceApp = AppItem(
+            identifier: "app.alpha",
+            bundleIdentifier: "app.alpha",
+            name: "Alpha",
+            url: URL(fileURLWithPath: "/Applications/Alpha.app"),
+            creationDate: creationDate,
+            modificationDate: modificationDate,
+            searchAliases: ["A"]
+        )
+        let layoutReloadedApp = AppItem(
+            identifier: sourceApp.identifier,
+            bundleIdentifier: sourceApp.bundleIdentifier,
+            name: sourceApp.name,
+            url: sourceApp.url,
+            creationDate: nil,
+            modificationDate: nil
+        )
+
+        let restored = AppScanner.applyingRuntimeMetadata(
+            to: [.app(layoutReloadedApp)],
+            from: [sourceApp]
+        )
+
+        guard let first = restored.first, case .app(let app) = first else {
+            return XCTFail("Expected the layout-reloaded application")
+        }
+        XCTAssertEqual(app.creationDate, creationDate)
+        XCTAssertEqual(app.modificationDate, modificationDate)
+        XCTAssertEqual(app.searchAliases, ["A"])
+    }
+
     private func writeFixtureApp(
         at appURL: URL,
         bundleIdentifier: String,

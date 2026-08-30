@@ -117,12 +117,23 @@ final class LunchpadWindow: NSWindow {
     private let menuBarDockCornerWindow = MenuBarDockCornerWindow()
     private let gridView: IconGridView
     private let rootPageStore: RootPageStore
+    /// Delivered when the user completes a drag arrangement; the owner persists it.
+    var onDragCommit: ((LunchpadDragCommit) -> Void)?
     private(set) var isAnimatingClose = false
     private var presentationGeneration = 0
     private var menuBarGradientHeightConstraint: NSLayoutConstraint!
 
-    init(items: [LunchpadItem], localizer: AppLocalizer, rootPageStore: RootPageStore) {
-        gridView = IconGridView(items: items, localizer: localizer)
+    init(
+        items: [LunchpadItem],
+        localizer: AppLocalizer,
+        rootPageStore: RootPageStore,
+        allowsDragArrangement: Bool = true
+    ) {
+        gridView = IconGridView(
+            items: items,
+            localizer: localizer,
+            allowsDragArrangement: allowsDragArrangement
+        )
         self.rootPageStore = rootPageStore
         super.init(
             contentRect: NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900),
@@ -163,6 +174,9 @@ final class LunchpadWindow: NSWindow {
         }
         gridView.onBackgroundClick = { [weak self] in
             self?.close()
+        }
+        gridView.onDragCommit = { [weak self] commit in
+            self?.onDragCommit?(commit)
         }
         contentView = rootView
 

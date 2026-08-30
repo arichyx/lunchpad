@@ -31,6 +31,7 @@ enum ResolvedLanguage: String {
 }
 
 enum ApplicationSortOrder: String, CaseIterable {
+    case manual
     case name
     case creationDate
     case modificationDate

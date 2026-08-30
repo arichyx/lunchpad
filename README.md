@@ -16,6 +16,8 @@ app with one click. The name is intentional: Lunchpad is to Launchpad what `reqw
 - Paged app grid with two-finger horizontal swiping
 - Search using localized application names and nonlocalized bundle names
 - Logical folders, including the default Other folder
+- Drag icons to rearrange, drop one app on another to create a folder, or drop it on a folder
+  or the folder title to move apps between the root and folders
 - Automatic updates when apps are installed, removed, or replaced
 - Layout that adapts to the Dock on any screen edge
 - Menu bar icon and configurable global hot key
@@ -123,6 +125,9 @@ Lunchpad stores page order and logical folder assignments locally at:
 Logical folders do not move or modify real `.app` bundles. Removing a logical folder only returns
 its apps to the root level.
 
+If the layout database cannot be opened, Lunchpad falls back to a flat catalog and keeps launching
+and searching usable; drag arrangement is disabled until persistent layout storage is available.
+
 ## Development
 
 Lunchpad is a Swift Package Manager project and does not require an Xcode project.
@@ -131,6 +136,13 @@ Lunchpad is a Swift Package Manager project and does not require an Xcode projec
 swift build --package-path /absolute/path/to/lunchpad
 swift test --package-path /absolute/path/to/lunchpad
 /absolute/path/to/lunchpad/.build/debug/Lunchpad
+```
+
+Rebuild the debug binary and relaunch it in one step with the development helper. Pass `-f` to
+keep it attached to the terminal for live logs:
+
+```bash
+./Scripts/dev-run.sh
 ```
 
 The trackpad connection and report format are documented in
@@ -143,7 +155,7 @@ Release tags, branches, and GitHub Release automation are documented in
 ## Known limitations
 
 - External Magic Trackpads may use report formats that are not handled yet.
-- Keyboard navigation and drag-to-create folder editing are not implemented yet.
+- Folder rename and delete UI and dragging folders onto other folders are not implemented yet.
 - Ad-hoc builds cannot be notarized and may require manual approval after download.
 - Confirm that `Assets/AppIcon.png` is licensed for redistribution before publishing binaries.
 
