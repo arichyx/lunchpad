@@ -33,3 +33,5 @@
 "settings.four-finger-pinch.unavailable" = "手势激活已启用，但当前不可用：%@";
 "settings.error.generic" = "无法应用该设置：%@";
 "status.accessibility" = "Lunchpad";
+"settings.application-order.manual" = "手动";
+"folder.new" = "新建文件夹";

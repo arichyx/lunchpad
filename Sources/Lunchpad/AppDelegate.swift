@@ -2,12 +2,25 @@ import AppKit
 import DesktopStateKit
 import MultitouchKit
 
+enum CatalogRefreshLayoutRebaser {
+    static func rebase(
+        scannedItems: [LunchpadItem],
+        on layoutStore: LunchpadLayoutStore
+    ) throws -> [LunchpadItem] {
+        AppScanner.applyingRuntimeMetadata(
+            to: try layoutStore.loadVisibleItems(),
+            from: scannedItems.flatMap(\.apps)
+        )
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let preferences = LunchpadPreferences()
     private lazy var localizer = AppLocalizer(language: preferences.interfaceLanguage)
     private var window: LunchpadWindow?
     private var canonicalItems: [LunchpadItem] = []
+    private var layoutStore: LunchpadLayoutStore?
     private var catalogSynchronizer: ApplicationCatalogSynchronizer?
     private var hotKeyController: HotKeyController?
     private let loginItemController = LoginItemController()
@@ -26,19 +39,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.applyPreferenceChange(change)
         }
         let scanner = AppScanner()
-        let store: LunchpadLayoutStore?
         do {
             let openedStore = try LunchpadLayoutStore()
-            store = openedStore
+            layoutStore = openedStore
             print("Layout database: \(openedStore.databaseURL.path)")
         } catch {
             print("⚠️ Layout database unavailable, using flat layout: \(error)")
-            store = nil
         }
 
         let synchronizer = ApplicationCatalogSynchronizer(
             scanner: scanner,
-            layoutStore: store
+            layoutStore: layoutStore
         )
         synchronizer.onCatalogRefresh = {
             [weak self] items, catalogChanged, invalidatedIconPaths in
@@ -58,7 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         catalogSynchronizer = synchronizer
 
         // Restore logical folders from SQLite after scanning; Finder directories are not folders.
-        let items = synchronizer.loadInitialCatalog()
+        let initialCatalog = synchronizer.loadInitialCatalog()
+        if !initialCatalog.usesPersistentLayout {
+            layoutStore = nil
+        }
+        let items = initialCatalog.items
         canonicalItems = items
         let appCount = items.reduce(0) { $0 + $1.apps.count }
         let folderCount = items.reduce(0) { count, item in
@@ -69,8 +84,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window = LunchpadWindow(
             items: presentedItems(from: items),
             localizer: localizer,
-            rootPageStore: RootPageStore()
+            rootPageStore: RootPageStore(),
+            allowsDragArrangement: initialCatalog.usesPersistentLayout
         )
+        window?.onDragCommit = { [weak self] commit in
+            self?.handleDragCommit(commit)
+        }
 
         installStatusItem()
         installApplicationMenu()
@@ -370,17 +389,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.close()
     }
 
+    /// Persists a completed drag arrangement and keeps the presented catalog in step.
+    ///
+    /// The store's positions become the presented order in Manual mode, so the first drag under
+    /// an automatic ordering mode selects Manual without visibly re-sorting the grid. A commit
+    /// is serialized with background reconciliation; a genuinely stale arrangement still throws,
+    /// and the presented catalog is restored unchanged.
+    private func handleDragCommit(_ commit: LunchpadDragCommit) {
+        guard let layoutStore else {
+            refreshPresentedCatalog(animated: false)
+            return
+        }
+        do {
+            try layoutStore.commit(commit)
+            let arrangedItems = try layoutStore.loadVisibleItems()
+            canonicalItems = AppScanner.applyingRuntimeMetadata(
+                to: arrangedItems,
+                from: canonicalItems.flatMap(\.apps)
+            )
+        } catch {
+            print("⚠️ Drag arrangement was not saved: \(error)")
+            refreshPresentedCatalog(animated: false)
+            return
+        }
+
+        if preferences.applicationSortOrder != .manual {
+            preferences.applicationSortOrder = .manual
+        } else {
+            refreshPresentedCatalog(animated: false)
+        }
+    }
+
     private func applyCatalogRefresh(
         _ items: [LunchpadItem],
         catalogChanged: Bool,
         invalidatedIconPaths: Set<String>?
     ) {
-        canonicalItems = items
-        let appCount = items.reduce(0) { $0 + $1.apps.count }
+        let latestItems: [LunchpadItem]
+        if let layoutStore {
+            do {
+                // The scan completed off-main and its callback may arrive after a drag commit.
+                // Re-read positions now, then retain fresh filesystem metadata from the scan.
+                latestItems = try CatalogRefreshLayoutRebaser.rebase(
+                    scannedItems: items,
+                    on: layoutStore
+                )
+            } catch {
+                print("⚠️ Failed to apply application catalog refresh: \(error)")
+                return
+            }
+        } else {
+            latestItems = items
+        }
+
+        canonicalItems = latestItems
+        let appCount = latestItems.reduce(0) { $0 + $1.apps.count }
         let reason = catalogChanged ? "catalog change" : "app content change"
         print("Application catalog synchronized (\(reason)): \(appCount) apps")
         window?.update(
-            items: presentedItems(from: items),
+            items: presentedItems(from: latestItems),
             catalogChanged: catalogChanged,
             invalidatedIconPaths: invalidatedIconPaths
         )

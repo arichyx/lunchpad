@@ -69,6 +69,15 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "applicationSortOrder"), "creationDate")
     }
 
+    func testManualOrderingPersists() {
+        let preferences = LunchpadPreferences(defaults: defaults)
+
+        preferences.applicationSortOrder = .manual
+
+        XCTAssertEqual(preferences.applicationSortOrder, .manual)
+        XCTAssertEqual(defaults.string(forKey: "applicationSortOrder"), "manual")
+    }
+
     func testLanguageResolution() {
         XCTAssertEqual(
             InterfaceLanguage.system.resolved(preferredLanguages: ["zh-Hant-TW", "en"]),
@@ -94,6 +103,7 @@ final class PreferencesTests: XCTestCase {
 
         XCTAssertEqual(english.string("settings.title"), "Settings")
         XCTAssertEqual(english.string("settings.language.simplified-chinese"), "Chinese")
+        XCTAssertEqual(english.string("settings.application-order.manual"), "Manual")
         XCTAssertEqual(english.string("settings.application-order.creation-date"), "Creation Time")
         XCTAssertEqual(
             english.string("settings.application-order.modification-date"),
@@ -101,6 +111,7 @@ final class PreferencesTests: XCTestCase {
         )
         XCTAssertEqual(chinese.string("settings.title"), "设置")
         XCTAssertEqual(chinese.string("settings.language.simplified-chinese"), "中文")
+        XCTAssertEqual(chinese.string("settings.application-order.manual"), "手动")
         XCTAssertEqual(chinese.string("settings.application-order.creation-date"), "创建时间")
         XCTAssertEqual(
             chinese.string("settings.application-order.modification-date"),

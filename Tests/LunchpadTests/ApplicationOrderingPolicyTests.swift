@@ -95,6 +95,34 @@ final class ApplicationOrderingPolicyTests: XCTestCase {
         XCTAssertEqual(ordered.map(\.name), ["其他"])
     }
 
+    func testManualOrderingPresentsStoredOrderButStillLocalizesOther() {
+        let folder = AppFolder(
+            identifier: LunchpadLayoutStore.otherFolderIdentifier,
+            name: "Other",
+            apps: [app("Zulu"), app("Alpha")],
+            isSystem: true
+        )
+        let items: [LunchpadItem] = [
+            .app(app("Zulu")),
+            .folder(folder),
+            .app(app("Alpha")),
+        ]
+
+        let ordered = ApplicationOrderingPolicy.apply(
+            to: items,
+            order: .manual,
+            locale: locale,
+            otherFolderName: "其他"
+        )
+
+        // The stored order is presented unchanged, including member order.
+        XCTAssertEqual(ordered.map(\.name), ["Zulu", "其他", "Alpha"])
+        guard case .folder(let orderedFolder) = ordered[1] else {
+            return XCTFail("Expected the folder to keep its slot")
+        }
+        XCTAssertEqual(orderedFolder.apps.map(\.name), ["Zulu", "Alpha"])
+    }
+
     func testPresentationOrderingDoesNotRewriteStoredPositions() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "LunchpadOrderingTests-\(UUID().uuidString)",

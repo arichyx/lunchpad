@@ -192,6 +192,7 @@ final class SettingsWindowController: NSWindowController {
     private func rebuildOrderPopup() {
         orderPopup.removeAllItems()
         let values: [(ApplicationSortOrder, String)] = [
+            (.manual, localizer.string("settings.application-order.manual")),
             (.name, localizer.string("settings.application-order.name")),
             (.creationDate, localizer.string("settings.application-order.creation-date")),
             (.modificationDate, localizer.string("settings.application-order.modification-date")),

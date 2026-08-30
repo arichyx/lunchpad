@@ -7,6 +7,7 @@ enum ApplicationOrderingPolicy {
         locale: Locale,
         otherFolderName: String
     ) -> [LunchpadItem] {
+        // The localized Other display name applies in every mode; only the app ordering differs.
         let preparedItems = items.map { item -> LunchpadItem in
             guard case .folder(let folder) = item else { return item }
             return .folder(AppFolder(
@@ -14,10 +15,16 @@ enum ApplicationOrderingPolicy {
                 name: folder.identifier == LunchpadLayoutStore.otherFolderIdentifier
                     ? otherFolderName
                     : folder.name,
-                apps: sorted(folder.apps, order: order, locale: locale),
+                apps: order == .manual
+                    ? folder.apps
+                    : sorted(folder.apps, order: order, locale: locale),
                 isSystem: folder.isSystem
             ))
         }
+
+        // Manual ordering presents the persisted sort positions unchanged; drags already wrote
+        // them, so an identity app transform keeps the arranged layout stable across refreshes.
+        guard order != .manual else { return preparedItems }
 
         var rootApps = sorted(
             preparedItems.compactMap { item -> AppItem? in
@@ -42,7 +49,7 @@ enum ApplicationOrderingPolicy {
         apps.sorted { lhs, rhs in
             let dates: (left: Date?, right: Date?)?
             switch order {
-            case .name:
+            case .manual, .name:
                 dates = nil
             case .creationDate:
                 dates = (lhs.creationDate, rhs.creationDate)

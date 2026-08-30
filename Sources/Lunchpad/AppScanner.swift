@@ -230,6 +230,16 @@ final class AppScanner {
         _ items: [LunchpadItem],
         from discovered: [DiscoveredApplication]
     ) -> [LunchpadItem] {
+        Self.applyingRuntimeMetadata(to: items, from: discovered.map(\.item))
+    }
+
+    /// Restores metadata that is intentionally kept out of SQLite because it can be rebuilt from
+    /// the current application bundles. Layout-only reloads, such as a drag commit, use the same
+    /// path as a scan so sorting and search do not lose dates or aliases.
+    static func applyingRuntimeMetadata(
+        to items: [LunchpadItem],
+        from sourceApps: [AppItem]
+    ) -> [LunchpadItem] {
         // Aliases are derived scanner output; copy them from discovered items onto items loaded
         // from SQLite just as the filesystem dates are copied, so a SQLite-only read does not
         // need to persist rebuildable alias metadata.
@@ -238,11 +248,11 @@ final class AppScanner {
             modification: Date?,
             aliases: [String]
         )] = Dictionary(
-            uniqueKeysWithValues: discovered.map {
-                ($0.item.identifier, (
-                    creation: $0.item.creationDate,
-                    modification: $0.item.modificationDate,
-                    aliases: $0.item.searchAliases
+            uniqueKeysWithValues: sourceApps.map {
+                ($0.identifier, (
+                    creation: $0.creationDate,
+                    modification: $0.modificationDate,
+                    aliases: $0.searchAliases
                 ))
             }
         )
