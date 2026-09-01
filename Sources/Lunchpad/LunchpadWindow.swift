@@ -424,13 +424,25 @@ final class LunchpadWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
-    /// Consumes all scroll events at the window boundary: horizontal pages, vertical is discarded.
+    /// Owns paging input at the window boundary. An active pointer swipe keeps receiving drag/up
+    /// even after its collection view becomes hit-test transparent, and every new press resolves
+    /// only after an earlier page settle has committed its visible destination.
     override func sendEvent(_ event: NSEvent) {
-        guard event.type == .scrollWheel else {
+        switch event.type {
+        case .leftMouseDown:
+            gridView.prepareForPointerMouseDown()
             super.sendEvent(event)
-            return
+        case .leftMouseDragged, .leftMouseUp:
+            if !gridView.routeActivePointerSwipeEvent(event) {
+                super.sendEvent(event)
+            }
+        case .scrollWheel:
+            // Horizontal input pages; vertical input is deliberately discarded so it cannot
+            // leak through the full-screen overlay to applications below Lunchpad.
+            gridView.handleScrollWheel(event)
+        default:
+            super.sendEvent(event)
         }
-        gridView.handleScrollWheel(event)
     }
 
     // Escape (key code 53) closes the current level or window. Plain arrow keys move the active

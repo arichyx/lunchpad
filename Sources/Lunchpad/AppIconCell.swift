@@ -1,66 +1,112 @@
 import AppKit
 
 /// NSWorkspace icon loading touches bundles and Launch Services, so page transitions must hit memory.
-@MainActor
 final class AppIconCache {
     static let shared = AppIconCache()
 
     private let cache = NSCache<NSString, NSImage>()
-    private var pendingURLs: [URL] = []
-    private var isPrewarming = false
+    /// Icon loads are filesystem and Launch Services work and must never block the main thread
+    /// while the UI is animating (a swipe can enqueue a hundred of them). NSCache is thread-safe.
+    private let loadQueue = DispatchQueue(label: "com.arichyx.Lunchpad.icon-cache", qos: .userInitiated)
+    /// Pending load state, owned exclusively by `loadQueue`.
+    private let loadState = IconLoadState()
+    private let iconLoader: (URL) -> NSImage
 
-    private init() {
+    init(iconLoader: @escaping (URL) -> NSImage = { url in
+        NSWorkspace.shared.icon(forFile: url.path)
+    }) {
+        self.iconLoader = iconLoader
         cache.countLimit = 512
     }
 
+    /// Synchronous lookup-and-load for code that must have an image now (cell configuration
+    /// during reloads). Prewarming normally keeps this a memory hit.
     func icon(for url: URL) -> NSImage {
         let key = url.path as NSString
         if let cached = cache.object(forKey: key) {
             return cached
         }
 
-        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        let icon = iconLoader(url)
         icon.size = NSSize(width: 80, height: 80)
         cache.setObject(icon, forKey: key)
         return icon
     }
 
+    /// Memory-only lookup for latency-sensitive UI (swipe page snapshots). A miss never loads
+    /// synchronously; the URL joins the background load queue instead, and callers may poll
+    /// again later as it fills.
+    func cachedIcon(for url: URL) -> NSImage? {
+        let key = url.path as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+        enqueueLoads([url])
+        return nil
+    }
+
     /// In-place upgrades reuse paths, so path-keyed icons require explicit invalidation.
     func invalidateAll() {
         cache.removeAllObjects()
-        pendingURLs.removeAll(keepingCapacity: true)
+        loadQueue.async { [cache, loadState] in
+            loadState.pendingURLs.removeAll()
+            loadState.queuedURLs.removeAll()
+            // A load already executing when the immediate invalidation ran may have inserted an
+            // obsolete image afterward. Clear again on the serialized load queue before any new
+            // prewarm request can run.
+            cache.removeAllObjects()
+        }
     }
 
     func invalidate(paths: Set<String>) {
         for path in paths {
             cache.removeObject(forKey: path as NSString)
         }
-        pendingURLs.removeAll { paths.contains($0.path) }
-    }
-
-    /// Load at most two icons per main-queue turn to preheat without blocking animation frames.
-    func prewarm(_ apps: [AppItem]) {
-        pendingURLs = apps.map(\.url)
-        guard !isPrewarming else { return }
-        isPrewarming = true
-        DispatchQueue.main.async { [weak self] in
-            self?.prewarmNextBatch()
-        }
-    }
-
-    private func prewarmNextBatch() {
-        for _ in 0..<2 {
-            guard let url = pendingURLs.first else {
-                isPrewarming = false
-                return
+        loadQueue.async { [cache, loadState] in
+            loadState.pendingURLs.removeAll { paths.contains($0.path) }
+            for path in paths {
+                loadState.queuedURLs.remove(URL(fileURLWithPath: path))
+                // Match invalidateAll's second pass: discard a value written by an in-flight
+                // loader after the caller's immediate removal.
+                cache.removeObject(forKey: path as NSString)
             }
-            pendingURLs.removeFirst()
-            _ = icon(for: url)
-        }
-        DispatchQueue.main.async { [weak self] in
-            self?.prewarmNextBatch()
         }
     }
+
+    /// Warms the cache off the main thread; a swipe's just-requested URLs merge into the same
+    /// queue rather than competing with it.
+    func prewarm(_ apps: [AppItem]) {
+        enqueueLoads(apps.map(\.url))
+    }
+
+    private func enqueueLoads(_ urls: [URL]) {
+        loadQueue.async { [cache, iconLoader, loadState] in
+            let fresh = urls.filter { loadState.queuedURLs.insert($0).inserted }
+            guard !fresh.isEmpty else { return }
+            loadState.pendingURLs.append(contentsOf: fresh)
+            while let url = loadState.pendingURLs.first {
+                loadState.pendingURLs.removeFirst()
+                loadState.queuedURLs.remove(url)
+                let key = url.path as NSString
+                if cache.object(forKey: key) != nil { continue }
+                let icon = iconLoader(url)
+                icon.size = NSSize(width: 80, height: 80)
+                cache.setObject(icon, forKey: key)
+            }
+        }
+    }
+
+    /// Test synchronization point for deterministic cache-race coverage.
+    func waitForPendingLoads() {
+        loadQueue.sync {}
+    }
+}
+
+/// Mutable pending-load state captured by `loadQueue` closures; array and set literals are
+/// immutable when captured directly.
+private final class IconLoadState {
+    var pendingURLs: [URL] = []
+    var queuedURLs = Set<URL>()
 }
 
 /// A classic 3x3 Lunchpad folder preview.
@@ -112,6 +158,20 @@ final class FolderIconView: NSView {
                 imageView.image = nil
                 imageView.isHidden = true
             }
+        }
+    }
+
+    /// Same as `configure(with:)` but never loads synchronously; a cache miss leaves the tile
+    /// empty until a later configure pass repaints it. Used by swipe page snapshots.
+    func configureCached(with apps: [AppItem]) {
+        for (index, imageView) in imageViews.enumerated() {
+            guard index < apps.count else {
+                imageView.image = nil
+                imageView.isHidden = true
+                continue
+            }
+            imageView.image = AppIconCache.shared.cachedIcon(for: apps[index].url)
+            imageView.isHidden = false
         }
     }
 }

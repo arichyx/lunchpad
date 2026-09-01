@@ -46,7 +46,7 @@ final class IconGridView: NSView {
     private var filteredItems: [LunchpadItem]
     private var currentFolder: AppFolder?
     private var rootPageBeforeEnteringFolder = 0
-    private var currentPage = 0
+    private(set) var currentPage = 0
     /// Most recently requested collection transition. Core Animation may stop exposing an
     /// explicit animation immediately for an offscreen layer, so retain the request for
     /// diagnostics and deterministic interaction tests.
@@ -88,6 +88,36 @@ final class IconGridView: NSView {
     private var dragLastPoint = NSPoint.zero
     private let allowsDragArrangement: Bool
 
+    // Swipe paging state. While a swipe is active the real collection view is hidden and a
+    // finger-following snapshot pager slides in its place: a fixed clip view sized like the
+    // grid (so pages never render into the outer margins) containing a translating content view
+    // with the current page and both existing neighbors. Both mouse drags and trackpad
+    // two-finger swipes drive the same pager.
+    private let swipeTracker = GridSwipeTracker()
+    private var swipeClipView: SwipePagerView?
+    private var swipeContentView: SwipePagerView?
+    /// Snapshot image views whose icons were uncached at build time, paired with their URLs so
+    /// later movement events can repaint them as the background prewarm fills the cache.
+    private var swipePendingIcons: [(imageView: NSImageView, url: URL)] = []
+    private var swipeTranslation: CGFloat = 0
+    private var swipePagingAllowed = false
+    /// Destination of the pager animation currently settling, or nil while the fingers are down
+    /// and while no swipe presentation is on screen. Page state is committed before a new input
+    /// begins so every gesture resolves against what the user can actually see.
+    private var swipeSettleDirection: Int?
+    /// Invalidates a pending swipe settle when the pager is rebuilt or torn down first.
+    private var swipeGeneration = 0
+
+    /// Whether the finger-following swipe pager is currently on screen (diagnostics and tests).
+    var isSwipePagingActive: Bool { swipeClipView != nil }
+
+    /// The pager's current horizontal translation in points; 0 while no swipe is active
+    /// (diagnostics and tests).
+    var swipePagerTranslation: CGFloat { swipeTranslation }
+
+    /// Whether a released swipe is still animating to its destination (diagnostics and tests).
+    var isSwipeSettling: Bool { swipeSettleDirection != nil }
+
     init(
         items: [LunchpadItem],
         localizer: AppLocalizer,
@@ -110,20 +140,81 @@ final class IconGridView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
+        prepareForPointerMouseDown()
         pressedOnOuterBackground = true
+        swipeTracker.begin(at: convert(event.locationInWindow, from: nil))
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if routeActivePointerSwipeEvent(event) {
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        // The tracker keeps its own begin point, so activation survives across the small
+        // sub-threshold movements that end the click interpretation. Clearing the flag on the
+        // first move (as before) must not also kill the still-forming swipe.
+        let consumed = swipeTracker.drag(to: point, timestamp: event.timestamp, canActivate: { [weak self] in
+            self?.swipePagingAllowed ?? false
+        })
         pressedOnOuterBackground = false
+        if consumed {
+            return
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
+        if routeActivePointerSwipeEvent(event) {
+            return
+        }
         let point = convert(event.locationInWindow, from: nil)
         let shouldHandleClick = pressedOnOuterBackground && bounds.contains(point)
         pressedOnOuterBackground = false
         if shouldHandleClick {
             handleBackgroundClick()
         }
+    }
+
+    /// Called by LunchpadWindow before hit-testing a new press. If the previous swipe is still
+    /// settling, commit its visible destination and restore the real collection view first; the
+    /// same mouse-down can then target the correct icon or gap on the new page.
+    func prepareForPointerMouseDown() {
+        finishSwipeSettleImmediately()
+    }
+
+    /// Routes drag/up events for the active pointer swipe independently of which subview AppKit
+    /// would hit-test at the current cursor location. LunchpadWindow calls this before ordinary
+    /// dispatch so releasing over search, page dots, or the Dock-side margins cannot strand the
+    /// collection view in swipe standby.
+    @discardableResult
+    func routeActivePointerSwipeEvent(_ event: NSEvent) -> Bool {
+        switch event.type {
+        case .leftMouseDragged:
+            if swipeTracker.isActive {
+                let point = convert(event.locationInWindow, from: nil)
+                _ = swipeTracker.drag(to: point, timestamp: event.timestamp) { true }
+                return true
+            }
+            if collectionView.isSwipeTracking {
+                collectionView.forwardSwipeDrag(
+                    collectionView.convert(event.locationInWindow, from: nil),
+                    timestamp: event.timestamp
+                )
+                return true
+            }
+        case .leftMouseUp:
+            if swipeTracker.isActive {
+                _ = swipeTracker.end()
+                pressedOnOuterBackground = false
+                return true
+            }
+            if collectionView.isSwipeTracking {
+                collectionView.concludeSwipeTracking()
+                return true
+            }
+        default:
+            break
+        }
+        return false
     }
 
     var pageCount: Int {
@@ -241,6 +332,10 @@ final class IconGridView: NSView {
     /// Handles window-forwarded scroll events so transparent regions page horizontally and
     /// vertical scrolling never leaks to an underlying application.
     func handleScrollWheel(_ event: NSEvent) {
+        if event.momentumPhase.isEmpty,
+           event.phase.contains(.began) || event.phase.isEmpty {
+            finishSwipeSettleImmediately()
+        }
         collectionView.scrollWheel(with: event)
     }
 
@@ -331,6 +426,14 @@ final class IconGridView: NSView {
 
     private func setup() {
         wantsLayer = true
+
+        // The outer background runs its own swipe tracker; route it into the shared pager.
+        swipeTracker.onMoved = { [weak self] translation in
+            self?.handleSwipeMoved(rawTranslation: translation)
+        }
+        swipeTracker.onEnded = { [weak self] translation, velocity in
+            self?.handleSwipeEnded(translation: translation, velocity: velocity)
+        }
 
         setupSearchField()
         setupFolderTitleLabel()
@@ -447,6 +550,18 @@ final class IconGridView: NSView {
         collectionView.onDragEnded = { [weak self] point in
             self?.handleDragEnded(at: point)
         }
+        collectionView.onSwipePaging = { [weak self] in
+            self?.swipePagingAllowed ?? false
+        }
+        collectionView.onSwipeGestureWillBegin = { [weak self] in
+            self?.finishSwipeSettleImmediately()
+        }
+        collectionView.onSwipeMoved = { [weak self] translation in
+            self?.handleSwipeMoved(rawTranslation: translation)
+        }
+        collectionView.onSwipeEnded = { [weak self] translation, velocity in
+            self?.handleSwipeEnded(translation: translation, velocity: velocity)
+        }
         collectionView.register(AppIconCell.self, forItemWithIdentifier: AppIconCell.identifier)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
     }
@@ -465,7 +580,7 @@ final class IconGridView: NSView {
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
     }
 
-    private func showPage(_ page: Int) {
+    private func showPage(_ page: Int, animated: Bool = true) {
         let target = min(max(page, 0), pageCount - 1)
         guard target != currentPage else { return }
         let direction = target > currentPage ? 1 : -1
@@ -473,10 +588,14 @@ final class IconGridView: NSView {
         // The floating drag snapshot is outside the collection view's layer, so the page can
         // keep its normal push transition underneath it. `reloadPage` first normalizes every
         // reused cell, preventing an outgoing preview animation from leaking into the new page.
-        reloadPage(animated: true, direction: direction)
+        // A swipe commit passes `animated: false`: the finger-following pager already moved the
+        // new page into place, so an additional push transition would replay the movement.
+        reloadPage(animated: animated, direction: direction)
     }
 
     private func reloadPage(animated: Bool, direction: Int = 0) {
+        cancelSwipePaging()
+        swipePagingAllowed = pageCount > 1
         currentPage = min(currentPage, pageCount - 1)
         // A preview moves collection-view item views through the animator. Cancel those layer
         // animations before reloading or reusing the cells; otherwise an outgoing page can write
@@ -605,6 +724,243 @@ final class IconGridView: NSView {
         folderTitleLabel.isHidden = true
         searchField.isHidden = false
         reloadPage(animated: animated)
+    }
+
+    // MARK: Swipe paging
+
+    /// A plain container in the collection view's flipped coordinate space, so grid slot frames
+    /// can be reused unchanged for the snapshot pages. Internal for layout verification tests.
+    /// The clip instance is transparent to hit testing: it is pure presentation, and letting it
+    /// swallow events would wedge the launcher once a swipe hides the tracked collection view.
+    final class SwipePagerView: NSView {
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    /// Follows the fingers while a swipe is active: the translating content view (holding the
+    /// current page and both neighbors) moves inside the fixed full-screen clip view. Pages
+    /// travel the whole screen width like the real Launchpad — each page snapshot keeps its own
+    /// grid inset, so icons slide across the outer margins instead of being cut at them. Moving
+    /// the frame (not a layer transform) keeps AppKit's managed layer geometry out of the way.
+    private func handleSwipeMoved(rawTranslation: CGFloat) {
+        // A new gesture may arrive before the previous settle timer fires. Commit the page that
+        // is already visually winning before interpreting this translation against its neighbors.
+        finishSwipeSettleImmediately()
+        // `swipePagingAllowed` is only updated alongside a reload, which always tears down an
+        // in-flight swipe first, so it cannot go stale in the middle of a gesture.
+        guard swipePagingAllowed else { return }
+        // A drag event re-engages the pager: a completion still pending from an earlier release
+        // (quick successive swipes reuse the settling pager) must not fire now.
+        swipeGeneration += 1
+        if swipeClipView == nil {
+            beginSwipePaging()
+        }
+
+        // Dragging right (positive) reveals the previous page; dragging left reveals the next.
+        let direction: Int = rawTranslation >= 0 ? -1 : 1
+        let hasNeighbor = !swipeNeighborItems(direction: direction).isEmpty
+        var translation = GridSwipePolicy.displayTranslation(raw: rawTranslation, hasNeighbor: hasNeighbor)
+        if hasNeighbor {
+            // Both pages are already on screen; never slide past the neighbor's far edge.
+            let pageUnit = bounds.width
+            translation = min(max(translation, -pageUnit), pageUnit)
+        }
+        swipeTranslation = translation
+        swipeContentView?.frame.origin.x = translation
+        fillMissingSwipeIcons()
+    }
+
+    private func handleSwipeEnded(translation _: CGFloat, velocity: CGFloat) {
+        guard let clipView = swipeClipView, let contentView = swipeContentView else { return }
+        let pageUnit = bounds.width
+        var direction = GridSwipePolicy.commitDirection(
+            translation: swipeTranslation,
+            velocity: velocity,
+            pagerWidth: pageUnit
+        )
+        if swipeNeighborItems(direction: direction).isEmpty {
+            direction = 0
+        }
+
+        swipeSettleDirection = direction
+        swipeTranslation = 0
+        let target: CGFloat = direction == 0 ? 0 : -CGFloat(direction) * pageUnit
+        let duration = direction == 0 ? 0.25 : 0.22
+
+        var settleFrame = contentView.frame
+        settleFrame.origin.x = target
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            contentView.animator().frame = settleFrame
+        }
+
+        // Follow the drag-settle pattern: a delayed main-queue hop instead of a Core Animation
+        // completion, which offscreen layers do not deliver reliably. The generation check
+        // invalidates the swap-in when a rebuild or content reload tears the pager down first.
+        let generation = swipeGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { [weak self] in
+            guard let self, self.swipeGeneration == generation else { return }
+            // Use the retained clip identity to ensure an unrelated pager was not substituted
+            // without also changing the generation.
+            guard self.swipeClipView === clipView else { return }
+            self.completeSwipeSettle(direction: direction)
+        }
+    }
+
+    private func beginSwipePaging() {
+        swipeGeneration += 1
+        swipeSettleDirection = nil
+        swipePendingIcons.removeAll()
+        // The clip spans the whole view: pages travel the full screen width, and their icons
+        // pass across the outer margins like the real Launchpad instead of vanishing at an
+        // invisible wall where the grid area ends. Nothing can render past the screen edge.
+        let clipView = SwipePagerView(frame: bounds)
+        clipView.wantsLayer = true
+        clipView.layer?.masksToBounds = true
+
+        // Each page snapshot keeps its grid inset inside its own full-width page unit; at rest
+        // the current page's icons land exactly where the real collection view draws them. The
+        // y must be flipped with the container: this view measures from the bottom, the flipped
+        // pager content from the top.
+        let pageUnit = bounds.width
+        let pageFrame = CGRect(
+            x: collectionView.frame.minX,
+            y: bounds.height - collectionView.frame.maxY,
+            width: collectionView.frame.width,
+            height: collectionView.frame.height
+        )
+        let contentView = SwipePagerView(frame: CGRect(origin: .zero, size: bounds.size))
+        contentView.addSubview(
+            makeSwipePageSnapshot(items: Array(itemsOnCurrentPage), frame: pageFrame)
+        )
+        for direction in [-1, 1] {
+            let neighbor = swipeNeighborItems(direction: direction)
+            guard !neighbor.isEmpty else { continue }
+            // Both neighbors are materialized up front: reversing a swipe mid-gesture must not
+            // rebuild (and repaint) the pages the fingers are following. The neighbor keeps the
+            // same flipped page frame, one page unit to either side.
+            contentView.addSubview(
+                makeSwipePageSnapshot(
+                    items: neighbor,
+                    frame: pageFrame.offsetBy(dx: CGFloat(direction) * pageUnit, dy: 0)
+                )
+            )
+        }
+        clipView.addSubview(contentView)
+        // Above the pages' stand-in view, below the page indicator so the dots stay visible.
+        addSubview(clipView, positioned: .above, relativeTo: collectionView)
+        swipeClipView = clipView
+        swipeContentView = contentView
+        // Standby rather than hidden: hidden views stop receiving the drag and mouse-up events
+        // AppKit still owes the mouse-down view, which would strand the gesture mid-flight.
+        collectionView.isSwipeStandby = true
+    }
+
+    /// Repaints snapshot icons whose images were still uncached when the pager was built. The
+    /// background prewarm fills the cache on its own cadence; each movement event picks up
+    /// whatever has become ready.
+    private func fillMissingSwipeIcons() {
+        guard !swipePendingIcons.isEmpty else { return }
+        swipePendingIcons.removeAll { imageView, url in
+            let image = AppIconCache.shared.cachedIcon(for: url)
+            imageView.image = image
+            return image != nil
+        }
+    }
+
+    private func swipeNeighborItems(direction: Int) -> [LunchpadItem] {
+        let start = (currentPage + direction) * Layout.pageCapacity
+        guard start >= 0, start < filteredItems.count else { return [] }
+        let end = min(start + Layout.pageCapacity, filteredItems.count)
+        return Array(filteredItems[start..<end])
+    }
+
+    /// A static copy of one page in flipped grid coordinates: cached icons above their labels,
+    /// laid out like an `AppIconCell`. Cheap enough to build at swipe start.
+    private func makeSwipePageSnapshot(items: [LunchpadItem], frame: NSRect) -> NSView {
+        let view = SwipePagerView(frame: frame)
+        for (slot, item) in items.enumerated() {
+            view.addSubview(
+                makeSwipeItemView(for: item, frame: gridLayout.frameForSlot(at: slot))
+            )
+        }
+        return view
+    }
+
+    private func makeSwipeItemView(for item: LunchpadItem, frame: NSRect) -> NSView {
+        let container = SwipePagerView(frame: frame)
+        let iconSide: CGFloat = 80
+        let iconFrame = NSRect(
+            x: (frame.width - iconSide) / 2,
+            y: 0,
+            width: iconSide,
+            height: iconSide
+        )
+        switch item {
+        case .app(let app):
+            let imageView = NSImageView(frame: iconFrame)
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+            // Never load synchronously here: a swipe may build over a hundred icons and a cold
+            // cache would stall the main thread on Launch Services during the gesture. Misses
+            // are queued for the background prewarm and repainted as they arrive.
+            imageView.image = AppIconCache.shared.cachedIcon(for: app.url)
+            if imageView.image == nil {
+                swipePendingIcons.append((imageView, app.url))
+            }
+            container.addSubview(imageView)
+        case .folder(let folder):
+            let folderView = FolderIconView(frame: iconFrame)
+            folderView.configureCached(with: Array(folder.apps.prefix(9)))
+            container.addSubview(folderView)
+        }
+
+        let label = NSTextField(labelWithString: item.name)
+        label.frame = NSRect(x: 0, y: iconSide + 8, width: frame.width, height: 16)
+        label.font = .systemFont(ofSize: 12, weight: .regular)
+        label.textColor = .white
+        label.alignment = .center
+        label.lineBreakMode = .byTruncatingTail
+        container.addSubview(label)
+        return container
+    }
+
+    /// Completes the currently visible settle immediately. This is invoked before a fresh
+    /// pointer or wheel gesture so quick successive swipes advance from the first swipe's
+    /// destination instead of invalidating its delayed page commit.
+    private func finishSwipeSettleImmediately() {
+        guard let direction = swipeSettleDirection else { return }
+        swipeGeneration += 1
+        swipeContentView?.layer?.removeAllAnimations()
+        completeSwipeSettle(direction: direction)
+    }
+
+    private func completeSwipeSettle(direction: Int) {
+        swipeSettleDirection = nil
+        swipeClipView?.removeFromSuperview()
+        swipeClipView = nil
+        swipeContentView = nil
+        swipePendingIcons.removeAll()
+        collectionView.isSwipeStandby = false
+        swipeTranslation = 0
+        if direction != 0 {
+            showPage(currentPage + direction, animated: false)
+        }
+    }
+
+    /// Tears down an in-flight swipe instantly. Every content reload calls this, so the pager
+    /// can never survive into a page or dataset it no longer represents.
+    private func cancelSwipePaging() {
+        swipeGeneration += 1
+        swipeSettleDirection = nil
+        swipeTracker.cancel()
+        collectionView.cancelSwipeTracking()
+        swipeClipView?.removeFromSuperview()
+        swipeClipView = nil
+        swipeContentView = nil
+        swipePendingIcons.removeAll()
+        collectionView.isSwipeStandby = false
+        swipeTranslation = 0
     }
 
     // MARK: Drag arrangement
@@ -749,8 +1105,9 @@ final class IconGridView: NSView {
     /// follows this call, so shifted frames are left for the reload to replace and the origin
     /// cell stays hidden until the reload reconfigures it.
     func cancelActiveDrag() {
-        guard draggedContainerIndex != nil else { return }
+        swipeTracker.cancel()
         collectionView.cancelDragGesture()
+        guard draggedContainerIndex != nil else { return }
         resetVisibleItemFrames()
         stopDragEdgeTurning()
         finishDrag(restoringOriginCell: false)
