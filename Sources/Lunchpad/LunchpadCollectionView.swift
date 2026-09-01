@@ -15,6 +15,15 @@ final class LunchpadCollectionView: NSCollectionView {
     var onDragMoved: ((NSPoint) -> Void)?
     var onDragEnded: ((NSPoint) -> Void)?
 
+    /// Whether swipe paging may begin right now (multiple pages, no icon drag in flight).
+    var onSwipePaging: (() -> Bool)?
+    /// Gives the grid a chance to finish an earlier settle before this view resolves the new
+    /// press against real collection-view cells. This keeps quick successive swipes and clicks
+    /// aligned with the page currently visible on screen.
+    var onSwipeGestureWillBegin: (() -> Void)?
+    var onSwipeMoved: ((CGFloat) -> Void)?
+    var onSwipeEnded: ((_ translation: CGFloat, _ velocity: CGFloat) -> Void)?
+
     private enum DragState {
         case idle
         case possible
@@ -26,23 +35,56 @@ final class LunchpadCollectionView: NSCollectionView {
     private var dragState = DragState.idle
     private var dragStartPoint = NSPoint.zero
     private var accumulatedHorizontalDelta = 0.0
-    private var didTurnPageInCurrentGesture = false
     private var lastDiscreteWheelTurnAt = 0.0
     private var pressedIndexPath: IndexPath?
     private var pressedOnBackground = false
+    private let swipeTracker = GridSwipeTracker()
+    private var wheelSwipe = GridSwipeWheelTracker()
+    /// A reload can cancel a phase-bearing trackpad gesture while macOS still has `.changed` and
+    /// `.ended` samples queued. Ignore that tail until a genuinely new `.began` arrives.
+    private var ignoresWheelSwipeUntilBegan = false
+
+    init() {
+        super.init(frame: .zero)
+        // The tracker reports through this view's callbacks; IconGridView drives the pager.
+        swipeTracker.onMoved = { [weak self] translation in
+            self?.onSwipeMoved?(translation)
+        }
+        swipeTracker.onEnded = { [weak self] translation, velocity in
+            self?.onSwipeEnded?(translation, velocity)
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func mouseDown(with event: NSEvent) {
+        onSwipeGestureWillBegin?()
         let point = convert(event.locationInWindow, from: nil)
         pressedIndexPath = indexPathForItem(at: point)
         pressedOnBackground = pressedIndexPath == nil
         dragState = pressedIndexPath == nil ? .idle : .possible
         dragStartPoint = point
+        // Always reset: a press that never saw mouse-up must not leave a stale swipe active,
+        // and a fresh press takes priority over any trackpad gesture still in flight.
+        swipeTracker.begin(at: point)
+        wheelSwipe.restart()
         updatePressedAppearance(isInsideOriginalItem: true)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let pressedIndexPath else { return }
         let point = convert(event.locationInWindow, from: nil)
+        if swipeTracker.isActive {
+            _ = swipeTracker.drag(to: point, timestamp: event.timestamp) { true }
+            return
+        }
+        if pressedIndexPath == nil,
+           swipeTracker.drag(to: point, timestamp: event.timestamp, canActivate: { [weak self] in
+               self?.dragState != .active && (self?.onSwipePaging?() ?? false)
+           }) {
+            return
+        }
+
+        guard let pressedIndexPath else { return }
 
         if dragState == .active {
             onDragMoved?(point)
@@ -67,6 +109,13 @@ final class LunchpadCollectionView: NSCollectionView {
 
     override func mouseUp(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+
+        // An activated swipe reports its release through the tracker's `onEnded`.
+        if swipeTracker.isActive {
+            concludeSwipeTracking()
+            return
+        }
+
         let wasDragging = dragState == .active
         dragState = .idle
 
@@ -95,6 +144,50 @@ final class LunchpadCollectionView: NSCollectionView {
         }
     }
 
+    /// Whether a swipe gesture started in this view is still tracking.
+    var isSwipeTracking: Bool { swipeTracker.isActive }
+
+    /// True while the swipe pager stands in for this view's content. The view must stay
+    /// visible to AppKit — hiding the view that received mouse-down severs drag and mouse-up
+    /// delivery entirely, wedging the gesture — so it disappears through alpha and stops
+    /// hit-testing instead.
+    var isSwipeStandby = false {
+        didSet {
+            guard isSwipeStandby != oldValue else { return }
+            alphaValue = isSwipeStandby ? 0 : 1
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        isSwipeStandby ? nil : super.hitTest(point)
+    }
+
+    /// Feeds a drag event that arrived through the responder chain. The pager puts this view
+    /// on standby, so AppKit may re-route later events to the grid instead of here.
+    func forwardSwipeDrag(_ point: NSPoint, timestamp: TimeInterval) {
+        guard swipeTracker.isActive else { return }
+        _ = swipeTracker.drag(to: point, timestamp: timestamp) { true }
+    }
+
+    /// Finishes an active swipe from a responder-chain mouse-up, reporting the release through
+    /// the regular `onSwipeEnded` callback.
+    func concludeSwipeTracking() {
+        guard swipeTracker.isActive else { return }
+        _ = swipeTracker.end()
+        dragState = .idle
+        pressedIndexPath = nil
+        pressedOnBackground = false
+    }
+
+    /// Cancels every paging recognizer owned by the collection view. Content reloads call this
+    /// even when no icon arrangement drag exists, so an old mouse or wheel gesture cannot rebuild
+    /// a pager over replacement data.
+    func cancelSwipeTracking() {
+        swipeTracker.cancel()
+        wheelSwipe.restart()
+        ignoresWheelSwipeUntilBegan = true
+    }
+
     /// Abandons an in-progress drag without reporting an end point. Used when a content reload
     /// invalidates the dragged cell; the trailing mouse-up is swallowed so it cannot fall
     /// through to background-click dismissal.
@@ -102,6 +195,7 @@ final class LunchpadCollectionView: NSCollectionView {
         dragState = .idle
         pressedIndexPath = nil
         pressedOnBackground = false
+        cancelSwipeTracking()
     }
 
     private func updatePressedAppearance(isInsideOriginalItem: Bool) {
@@ -110,34 +204,77 @@ final class LunchpadCollectionView: NSCollectionView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        // Two-finger swipes must not page while an icon is being arranged.
-        guard dragState != .active else { return }
-        // Ignore momentum events so one gesture advances at most one page.
+        // Two-finger input must not page while an icon is being arranged or dragged.
+        guard dragState != .active, !swipeTracker.isActive else { return }
+        // Momentum follows a finger lift; the release decision and settle already carry it.
         guard event.momentumPhase.isEmpty else { return }
-        guard abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else { return }
 
-        if event.phase == .began {
-            accumulatedHorizontalDelta = 0
-            didTurnPageInCurrentGesture = false
+        if event.phase.isEmpty {
+            handleDiscreteWheel(deltaX: event.scrollingDeltaX, timestamp: event.timestamp)
+            return
         }
-        accumulatedHorizontalDelta += event.scrollingDeltaX
+        handleTrackpadWheel(
+            deltaX: event.scrollingDeltaX,
+            deltaY: event.scrollingDeltaY,
+            phase: event.phase,
+            timestamp: event.timestamp
+        )
+    }
 
-        let now = ProcessInfo.processInfo.systemUptime
-        let isDiscreteWheel = event.phase.isEmpty
-        let canTurn = isDiscreteWheel
-            ? now - lastDiscreteWheelTurnAt > 0.45
-            : !didTurnPageInCurrentGesture
+    /// Notched mouse wheels and other phase-less input page discretely, one notch at a time.
+    private func handleDiscreteWheel(deltaX: CGFloat, timestamp: TimeInterval) {
+        guard abs(deltaX) > 0 else { return }
 
-        if canTurn && abs(accumulatedHorizontalDelta) >= 24 {
+        accumulatedHorizontalDelta += deltaX
+        let canTurn = timestamp - lastDiscreteWheelTurnAt > 0.45
+        if canTurn, abs(accumulatedHorizontalDelta) >= 24 {
             // Swiping left shows the next page; swiping right shows the previous page.
             onPageDelta?(accumulatedHorizontalDelta > 0 ? -1 : 1)
-            didTurnPageInCurrentGesture = true
-            lastDiscreteWheelTurnAt = now
+            lastDiscreteWheelTurnAt = timestamp
             accumulatedHorizontalDelta = 0
         }
+    }
 
-        if event.phase == .ended || event.phase == .cancelled {
-            accumulatedHorizontalDelta = 0
+    /// Trackpad two-finger swipes drive the finger-following pager: translation follows the
+    /// fingers and the release commits or snaps back. Internal (not private) so interaction
+    /// tests can drive phases without synthesizing phase-bearing scroll events.
+    func handleTrackpadWheel(
+        deltaX: CGFloat,
+        deltaY: CGFloat,
+        phase: NSEvent.Phase,
+        timestamp: TimeInterval
+    ) {
+        if phase.contains(.began) {
+            ignoresWheelSwipeUntilBegan = false
+            onSwipeGestureWillBegin?()
+            wheelSwipe.restart()
+        } else if ignoresWheelSwipeUntilBegan {
+            return
+        }
+        if phase.contains(.cancelled) {
+            // A system-cancelled gesture releases in place rather than deciding a page turn.
+            if wheelSwipe.isActive {
+                onSwipeEnded?(0, 0)
+                wheelSwipe.restart()
+            }
+            return
+        }
+        if phase.contains(.ended) {
+            if let release = wheelSwipe.finish(deltaX: deltaX, timestamp: timestamp) {
+                onSwipeEnded?(release.translation, release.velocity)
+            }
+            return
+        }
+        if let translation = wheelSwipe.advance(
+            deltaX: deltaX,
+            deltaY: deltaY,
+            timestamp: timestamp,
+            canActivate: { [weak self] in
+                // A wheel swipe must not take over while an icon arrangement drag could start.
+                self?.pressedIndexPath == nil && (self?.onSwipePaging?() ?? false)
+            }
+        ) {
+            onSwipeMoved?(translation)
         }
     }
 }

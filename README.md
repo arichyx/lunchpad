@@ -13,7 +13,7 @@ app with one click. The name is intentional: Lunchpad is to Launchpad what `reqw
 
 - Native full-screen AppKit interface
 - Four-finger pinch activation and spread-to-dismiss
-- Paged app grid with two-finger horizontal swiping
+- Paged app grid with two-finger horizontal swiping and pointer drag paging
 - Search using localized application names and nonlocalized bundle names
 - Logical folders, including the default Other folder
 - Drag icons to rearrange, drop one app on another to create a folder, or drop it on a folder
@@ -74,7 +74,9 @@ Lunchpad starts quietly in the menu bar and does not open the full-screen interf
 - When macOS is showing the desktop, an inward pinch restores the displaced windows without
   opening Lunchpad, regardless of how Show Desktop was entered.
 - Alternatively, press Control-Shift-Space or left-click the menu bar icon.
-- Swipe horizontally with two fingers, use the arrow keys, or click a page dot to change pages.
+- Change pages with a two-finger horizontal swipe, a sideways drag on empty space, the arrow
+  keys, or a page dot. Swipes and drags move the page with your fingers; release past a
+  threshold (or with a quick fling) to turn the page, and release early to snap back.
 - Type in the search field to find an app.
 - Click an app to close Lunchpad immediately and launch it.
 - Click a folder to browse its contents.
