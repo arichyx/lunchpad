@@ -29,8 +29,11 @@
 "settings.launch-at-login" = "登录时启动";
 "settings.launch-at-login.development" = "仅在运行打包后的应用时可用。";
 "settings.launch-at-login.error" = "Lunchpad 无法更新登录项：%@";
-"settings.four-finger-pinch" = "四指捏合";
-"settings.four-finger-pinch.unavailable" = "手势激活已启用，但当前不可用：%@";
+"settings.trackpad-gesture" = "触控板手势";
+"settings.trackpad-gesture.unavailable" = "手势激活已启用，但当前不可用：%@";
+"settings.gesture-finger-count" = "手指数";
+"settings.gesture-finger-count.three" = "三指";
+"settings.gesture-finger-count.four" = "四指";
 "settings.error.generic" = "无法应用该设置：%@";
 "status.accessibility" = "Lunchpad";
 "settings.application-order.manual" = "手动";

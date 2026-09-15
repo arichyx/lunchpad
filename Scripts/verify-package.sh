@@ -24,10 +24,17 @@ resource_bundle_name="Lunchpad_Lunchpad.bundle"
 
 verify_localizations() {
     local bundle="$1/Contents/Resources/$resource_bundle_name"
+    if [[ -d "$bundle/Contents/Resources" ]]; then
+        bundle="$bundle/Contents/Resources"
+    fi
+    local chinese_strings="$bundle/zh-hans.lproj/Localizable.strings"
+    if [[ ! -f "$chinese_strings" ]]; then
+        chinese_strings="$bundle/zh-Hans.lproj/Localizable.strings"
+    fi
     test -f "$bundle/en.lproj/Localizable.strings"
-    test -f "$bundle/zh-hans.lproj/Localizable.strings"
+    test -f "$chinese_strings"
     plutil -lint "$bundle/en.lproj/Localizable.strings" >/dev/null
-    plutil -lint "$bundle/zh-hans.lproj/Localizable.strings" >/dev/null
+    plutil -lint "$chinese_strings" >/dev/null
 }
 
 for path in "$app_bundle" "$zip_path" "$dmg_path" "$checksum_path"; do

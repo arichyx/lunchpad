@@ -69,23 +69,26 @@ Do not hard-code the sensor dimensions. Prefer `Sensor Surface Width` and
 
 ## Pinch recognition
 
-After parsing, states 0 and 7 are excluded. When at least four active fingers first appear,
-the recognizer locks onto the first four identifiers. If the driver briefly reports a fifth
-contact, it continues tracking the original four instead of resetting the gesture. Each frame
-computes the mean of the six pairwise distances and records the maximum distance observed
-during that four-finger contact sequence.
+After parsing, states 0 and 7 are excluded. The recognizer locks onto the configured three or four
+contact identifiers, computes their mean pairwise distance, and records the maximum distance
+observed during that contact sequence. Three-finger mode requires exactly three active contacts:
+if a fourth appears, the whole sequence is ignored until full release so Lunchpad cannot claim a
+macOS four-finger gesture. Four-finger mode continues tolerating a briefly reported fifth contact
+by tracking the original four identifiers.
 
-The recognizer fires once when the current distance contracts below 82% of the maximum, the
+The inward recognizer fires once when the current distance contracts below 82% of the maximum, the
 initial distance is sufficiently large, and no more than three seconds have elapsed. It unlocks
-after the active contact count drops below four. A four-finger swipe preserves pairwise distances
-closely enough that it does not satisfy the contraction threshold.
+after the active contact count drops below the configured count. The outward recognizer mirrors the
+same state machine and fires after expansion reaches 122% of the minimum. A swipe preserves
+pairwise distances closely enough that it does not satisfy either threshold.
 
-On the first contact of a new trackpad sequence, Lunchpad samples WindowServer geometry before the
-four-finger inward motion can start restoring displaced windows. If macOS is actually showing the
+In four-finger mode, on the first contact of a new trackpad sequence, Lunchpad samples WindowServer
+geometry before the inward motion can start restoring displaced windows. If macOS is actually showing the
 desktop, sizeable layer-zero windows owned by regular applications remain in the on-screen list
 but the overwhelming majority of their centres lie beyond every active display. System-owned base
 windows are ignored, and a small number of sticky or transitional windows may remain visible.
-Lunchpad suppresses only that contact sequence and lets macOS restore the windows. This state-based
+Lunchpad suppresses only that contact sequence and lets macOS restore the windows. Three-finger
+mode does not apply this suppression because it does not invoke the system restore gesture. This state-based
 check also covers Hot Corners, keyboard shortcuts, and wallpaper clicks, while a failed outward
 gesture leaves visible windows in place and does not suppress activation.
 

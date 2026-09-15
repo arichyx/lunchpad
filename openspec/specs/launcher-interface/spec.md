@@ -251,7 +251,7 @@ Lunchpad SHALL animate presentation and dismissal with fixed-duration opacity tr
 
 #### Scenario: A fast pinch activates Lunchpad
 
-- **WHEN** the four-finger gesture completes quickly
+- **WHEN** the configured three- or four-finger gesture completes quickly
 - **THEN** the launcher uses the same entrance duration as other activation methods
 
 #### Scenario: Lunchpad closes
@@ -259,9 +259,9 @@ Lunchpad SHALL animate presentation and dismissal with fixed-duration opacity tr
 - **WHEN** any close path is invoked
 - **THEN** the grid and full-screen backdrop fade out before their reusable windows are hidden
 
-### Requirement: Pointer-screen presentation for four-finger pinch
+### Requirement: Pointer-screen presentation for trackpad pinch
 
-Lunchpad SHALL sample the global pointer location when a recognized four-finger inward pinch
+Lunchpad SHALL sample the global pointer location when a recognized configured-finger inward pinch
 activates the hidden launcher and SHALL present the complete launcher on the connected screen
 containing that point. The interaction window, backdrop, menu-bar coverage, Dock exclusion, safe
 area layout, and grid layout SHALL all use the same selected screen for that presentation. If no
@@ -270,18 +270,18 @@ connected screen contains the sampled point, Lunchpad SHALL fall back to the mai
 #### Scenario: Pointer is on a non-main display when pinch completes
 
 - **WHEN** the launcher is hidden, the pointer is within a connected non-main display, and a
-  recognized four-finger inward pinch completes
+  recognized configured-finger inward pinch completes
 - **THEN** Lunchpad presents its interaction and supporting windows on that non-main display
 
 #### Scenario: Pointer is on the main display when pinch completes
 
 - **WHEN** the launcher is hidden, the pointer is within the main display, and a recognized
-  four-finger inward pinch completes
+  configured-finger inward pinch completes
 - **THEN** Lunchpad presents the complete launcher on the main display
 
 #### Scenario: Pointer does not match a connected screen
 
-- **WHEN** a recognized four-finger inward pinch activates Lunchpad while the sampled global
+- **WHEN** a recognized configured-finger inward pinch activates Lunchpad while the sampled global
   pointer location is outside every currently reported screen frame
 - **THEN** Lunchpad presents on the main screen without terminating or showing launcher-owned
   windows on different screens
@@ -345,4 +345,3 @@ root-level page SHALL be persisted; folder pages remain transient.
 
 - **WHEN** Lunchpad is quit and relaunched within the expiry window after a page was saved
 - **THEN** the relaunched process restores the saved root page
-

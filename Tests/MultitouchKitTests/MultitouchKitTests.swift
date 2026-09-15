@@ -53,6 +53,31 @@ final class MultitouchKitTests: XCTestCase {
         XCTAssertTrue(recognizer.process(contracted, at: 10.7))
     }
 
+    func testThreeFingerContractionTriggersOnceAndRearmsAfterRelease() {
+        var recognizer = PinchRecognizer(fingerCount: 3)
+        let spread = frame(scale: 1.0, fingerCount: 3)
+        let contracted = frame(scale: 0.80, fingerCount: 3)
+
+        XCTAssertFalse(recognizer.process(spread, at: 10.0))
+        XCTAssertTrue(recognizer.process(contracted, at: 10.2))
+        XCTAssertFalse(recognizer.process(contracted, at: 10.3))
+
+        XCTAssertFalse(recognizer.process(MultitouchFrame(contacts: []), at: 10.4))
+        XCTAssertFalse(recognizer.process(spread, at: 10.5))
+        XCTAssertTrue(recognizer.process(contracted, at: 10.7))
+    }
+
+    func testFourthContactResetsThreeFingerPinch() {
+        var recognizer = PinchRecognizer(fingerCount: 3)
+        let threeFingerSpread = frame(scale: 1.0, fingerCount: 3)
+        let fourFingerContraction = frame(scale: 0.8)
+        let threeFingerTail = frame(scale: 0.8, fingerCount: 3)
+
+        XCTAssertFalse(recognizer.process(threeFingerSpread, at: 15.0))
+        XCTAssertFalse(recognizer.process(fourFingerContraction, at: 15.1))
+        XCTAssertFalse(recognizer.process(threeFingerTail, at: 15.2))
+    }
+
     func testTransientFifthContactDoesNotResetFourFingerGesture() {
         var recognizer = PinchRecognizer(fingerCount: 4)
         let extra = MultitouchContact(identifier: 9, state: 2, x: 0.5, y: 0.5)
@@ -77,6 +102,31 @@ final class MultitouchKitTests: XCTestCase {
         XCTAssertFalse(recognizer.process(MultitouchFrame(contacts: []), at: 10.4))
         XCTAssertFalse(recognizer.process(close, at: 10.5))
         XCTAssertTrue(recognizer.process(expanded, at: 10.7))
+    }
+
+    func testThreeFingerExpansionTriggersOnceAndRearmsAfterRelease() {
+        var recognizer = ExpandRecognizer(fingerCount: 3)
+        let close = frame(scale: 0.5, fingerCount: 3)
+        let expanded = frame(scale: 0.8, fingerCount: 3)
+
+        XCTAssertFalse(recognizer.process(close, at: 10.0))
+        XCTAssertTrue(recognizer.process(expanded, at: 10.2))
+        XCTAssertFalse(recognizer.process(expanded, at: 10.3))
+
+        XCTAssertFalse(recognizer.process(MultitouchFrame(contacts: []), at: 10.4))
+        XCTAssertFalse(recognizer.process(close, at: 10.5))
+        XCTAssertTrue(recognizer.process(expanded, at: 10.7))
+    }
+
+    func testFourthContactResetsThreeFingerExpand() {
+        var recognizer = ExpandRecognizer(fingerCount: 3)
+        let threeFingerClose = frame(scale: 0.5, fingerCount: 3)
+        let fourFingerExpansion = frame(scale: 0.8)
+        let threeFingerTail = frame(scale: 0.8, fingerCount: 3)
+
+        XCTAssertFalse(recognizer.process(threeFingerClose, at: 15.0))
+        XCTAssertFalse(recognizer.process(fourFingerExpansion, at: 15.1))
+        XCTAssertFalse(recognizer.process(threeFingerTail, at: 15.2))
     }
 
     func testTransientFifthContactDoesNotResetFourFingerExpand() {
@@ -293,7 +343,67 @@ final class MultitouchKitTests: XCTestCase {
         )
     }
 
-    private func frame(scale: Double) -> MultitouchFrame {
+    func testIneligibleContactCountCancelsPendingGestureUntilFullRelease() {
+        var gate = PinchCompletionGate()
+        let threeContacts = frame(scale: 0.8, fingerCount: 3)
+        let fourContacts = frame(scale: 0.8)
+        let oneContact = MultitouchFrame(contacts: Array(threeContacts.contacts.prefix(1)))
+        let released = MultitouchFrame(contacts: [])
+
+        XCTAssertNil(
+            gate.process(
+                threeContacts,
+                pinchDetected: true,
+                expandDetected: false,
+                evaluateActivation: { true }
+            )
+        )
+        XCTAssertNil(
+            gate.process(
+                fourContacts,
+                pinchDetected: false,
+                expandDetected: false,
+                sequenceEligible: false,
+                evaluateActivation: { XCTFail("Rejected sequence must not resample"); return true }
+            )
+        )
+        XCTAssertNil(
+            gate.process(
+                oneContact,
+                pinchDetected: false,
+                expandDetected: false,
+                evaluateActivation: { XCTFail("Rejected tail must stay ignored"); return true }
+            )
+        )
+        XCTAssertNil(
+            gate.process(
+                released,
+                pinchDetected: false,
+                expandDetected: false,
+                evaluateActivation: { XCTFail("Release must not resample"); return true }
+            )
+        )
+
+        XCTAssertNil(
+            gate.process(
+                threeContacts,
+                pinchDetected: true,
+                expandDetected: false,
+                evaluateActivation: { true }
+            )
+        )
+        XCTAssertEqual(
+            gate.process(
+                oneContact,
+                pinchDetected: false,
+                expandDetected: false,
+                evaluateActivation: { XCTFail("Gesture state was sampled twice"); return true }
+            ),
+            .activate
+        )
+    }
+
+    private func frame(scale: Double, fingerCount: Int = 4) -> MultitouchFrame {
         let center = 0.5
         let points = [
             (0.2, 0.2),
@@ -301,7 +411,7 @@ final class MultitouchKitTests: XCTestCase {
             (0.2, 0.8),
             (0.8, 0.8),
         ]
-        let contacts = points.enumerated().map { index, point in
+        let contacts = points.prefix(fingerCount).enumerated().map { index, point in
             MultitouchContact(
                 identifier: UInt8(index + 1),
                 state: 2,

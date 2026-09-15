@@ -51,18 +51,23 @@ bin_dir="$(
 executable_path="$bin_dir/$executable_name"
 resource_bundle_name="Lunchpad_Lunchpad.bundle"
 resource_bundle_path="$bin_dir/$resource_bundle_name"
+resource_root="$resource_bundle_path"
+if [[ -d "$resource_bundle_path/Contents/Resources" ]]; then
+    resource_root="$resource_bundle_path/Contents/Resources"
+fi
 
 if [[ ! -x "$executable_path" ]]; then
     echo "Missing executable: $executable_path" >&2
     exit 1
 fi
 
-if [[ ! -f "$resource_bundle_path/en.lproj/Localizable.strings" ]]; then
+if [[ ! -f "$resource_root/en.lproj/Localizable.strings" ]]; then
     echo "Missing English localization: $resource_bundle_path" >&2
     exit 1
 fi
 
-if [[ ! -f "$resource_bundle_path/zh-hans.lproj/Localizable.strings" ]]; then
+if [[ ! -f "$resource_root/zh-hans.lproj/Localizable.strings" &&
+      ! -f "$resource_root/zh-Hans.lproj/Localizable.strings" ]]; then
     echo "Missing Simplified Chinese localization: $resource_bundle_path" >&2
     exit 1
 fi

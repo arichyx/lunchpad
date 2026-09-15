@@ -99,6 +99,7 @@ public struct MultitouchPacketParser: Sendable {
 /// Detects an inward pinch using the mean pairwise distance between all tracked contacts.
 public struct PinchRecognizer: Sendable {
     public let fingerCount: Int
+    public let maximumContactCount: Int
     public let contractionThreshold: Double
     public let minimumStartingDistance: Double
     public let maximumDuration: TimeInterval
@@ -110,11 +111,13 @@ public struct PinchRecognizer: Sendable {
 
     public init(
         fingerCount: Int = 4,
+        maximumContactCount: Int? = nil,
         contractionThreshold: Double = 0.82,
         minimumStartingDistance: Double = 0.06,
         maximumDuration: TimeInterval = 3.0
     ) {
         self.fingerCount = fingerCount
+        self.maximumContactCount = maximumContactCount ?? (fingerCount == 4 ? 5 : fingerCount)
         self.contractionThreshold = contractionThreshold
         self.minimumStartingDistance = minimumStartingDistance
         self.maximumDuration = maximumDuration
@@ -125,7 +128,8 @@ public struct PinchRecognizer: Sendable {
         at timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime
     ) -> Bool {
         let activeContacts = frame.activeContacts
-        guard activeContacts.count >= fingerCount else {
+        guard activeContacts.count >= fingerCount,
+              activeContacts.count <= maximumContactCount else {
             reset()
             return false
         }
@@ -136,8 +140,7 @@ public struct PinchRecognizer: Sendable {
             if tracked.count == fingerCount {
                 contacts = tracked
             } else {
-                // The driver may alternate between four and five contacts. Rebuild the
-                // baseline only when a locked contact disappears.
+                // Rebuild the baseline only when one of the locked contacts disappears.
                 reset()
                 contacts = Array(activeContacts.prefix(fingerCount))
                 self.trackedIdentifiers = Set(contacts.map(\.identifier))
@@ -202,11 +205,12 @@ public struct PinchRecognizer: Sendable {
 /// tracked contacts. It is the symmetric counterpart to `PinchRecognizer`: instead of tracking the
 /// maximum distance reached and firing on contraction, it tracks the minimum distance reached and
 /// fires once when the current distance expands past the expansion threshold relative to that
-/// minimum. The four-contact identifier lock, fifth-contact tolerance, and stationary-too-long
+/// minimum. The configured-contact identifier lock, extra-contact policy, and stationary-too-long
 /// baseline reset mirror the pinch recognizer. A dismissal gesture is only meaningful while the
 /// launcher is already visible; visibility is enforced by the app layer, not here.
 public struct ExpandRecognizer: Sendable {
     public let fingerCount: Int
+    public let maximumContactCount: Int
     public let expansionThreshold: Double
     public let minimumStartingDistance: Double
     public let maximumDuration: TimeInterval
@@ -218,12 +222,14 @@ public struct ExpandRecognizer: Sendable {
 
     public init(
         fingerCount: Int = 4,
+        maximumContactCount: Int? = nil,
         // Approximately the inverse of the pinch contraction threshold (1 / 0.82).
         expansionThreshold: Double = 1.22,
         minimumStartingDistance: Double = 0.06,
         maximumDuration: TimeInterval = 3.0
     ) {
         self.fingerCount = fingerCount
+        self.maximumContactCount = maximumContactCount ?? (fingerCount == 4 ? 5 : fingerCount)
         self.expansionThreshold = expansionThreshold
         self.minimumStartingDistance = minimumStartingDistance
         self.maximumDuration = maximumDuration
@@ -234,7 +240,8 @@ public struct ExpandRecognizer: Sendable {
         at timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime
     ) -> Bool {
         let activeContacts = frame.activeContacts
-        guard activeContacts.count >= fingerCount else {
+        guard activeContacts.count >= fingerCount,
+              activeContacts.count <= maximumContactCount else {
             reset()
             return false
         }
@@ -245,8 +252,7 @@ public struct ExpandRecognizer: Sendable {
             if tracked.count == fingerCount {
                 contacts = tracked
             } else {
-                // The driver may alternate between four and five contacts. Rebuild the
-                // baseline only when a locked contact disappears.
+                // Rebuild the baseline only when one of the locked contacts disappears.
                 reset()
                 contacts = Array(activeContacts.prefix(fingerCount))
                 self.trackedIdentifiers = Set(contacts.map(\.identifier))
@@ -308,9 +314,9 @@ public struct ExpandRecognizer: Sendable {
 }
 
 /// Separates reaching the pinch threshold from completing the gesture.
-/// The system performs an interactive animation while the reserved four-finger gesture is
-/// active. Waiting for contact release prevents that remaining progress from affecting
-/// Lunchpad's fixed-duration animation.
+/// A system gesture may perform an interactive animation while the contacts are active. Waiting
+/// for release prevents that remaining progress from affecting Lunchpad's fixed-duration
+/// animation.
 enum PinchCompletionAction: Sendable, Equatable {
     case activate
     case suppress
@@ -325,17 +331,38 @@ enum PinchCompletionAction: Sendable, Equatable {
 /// until the sequence resets, so a single gesture emits at most one action. The activation policy
 /// (Show Desktop suppression) is sampled on the first contact and consulted only for the pinch
 /// outcome; a dismissal never depends on it.
+///
+/// A sequence that exceeds the configured contact policy is rejected until every contact lifts.
+/// This lets strict three-finger mode avoid claiming the tail of a four-finger system gesture.
 struct PinchCompletionGate: Sendable {
     private var pending = PendingGesture.none
     private var activationAllowed: Bool?
+    private var ignoringUntilRelease = false
 
     mutating func process(
         _ frame: MultitouchFrame,
         pinchDetected: Bool,
         expandDetected: Bool,
+        sequenceEligible: Bool = true,
         evaluateActivation: () -> Bool
     ) -> PinchCompletionAction? {
         let activeContactCount = frame.activeContacts.count
+
+        if ignoringUntilRelease {
+            if activeContactCount == 0 {
+                ignoringUntilRelease = false
+                pending = .none
+                activationAllowed = nil
+            }
+            return nil
+        }
+
+        guard sequenceEligible else {
+            pending = .none
+            activationAllowed = nil
+            ignoringUntilRelease = activeContactCount > 0
+            return nil
+        }
 
         // Sample once on the first contact of a sequence, before macOS restores displaced windows.
         // This value is read only when emitting a pinch activation; dismissals ignore it.
@@ -423,14 +450,24 @@ public final class MultitouchMonitor: @unchecked Sendable {
     private let stateLock = NSLock()
     private var recognizer: PinchRecognizer
     private var expandRecognizer: ExpandRecognizer
+    private let maximumContactCount: Int
     private var completionGate = PinchCompletionGate()
     private var running = false
     private var connection: io_connect_t = 0
     private var notificationPort: mach_port_t = 0
 
     public init(fingerCount: Int = 4) {
-        recognizer = PinchRecognizer(fingerCount: fingerCount)
-        expandRecognizer = ExpandRecognizer(fingerCount: fingerCount)
+        // Three-finger mode must not claim a deliberate four-finger system gesture. Four-finger
+        // mode retains the existing tolerance for a transient fifth driver contact.
+        maximumContactCount = fingerCount == 4 ? 5 : fingerCount
+        recognizer = PinchRecognizer(
+            fingerCount: fingerCount,
+            maximumContactCount: maximumContactCount
+        )
+        expandRecognizer = ExpandRecognizer(
+            fingerCount: fingerCount,
+            maximumContactCount: maximumContactCount
+        )
     }
 
     public func start() throws {
@@ -597,7 +634,8 @@ public final class MultitouchMonitor: @unchecked Sendable {
                     let completionAction = completionGate.process(
                         frame,
                         pinchDetected: pinchDetected,
-                        expandDetected: expandDetected
+                        expandDetected: expandDetected,
+                        sequenceEligible: frame.activeContacts.count <= maximumContactCount
                     ) { [weak self] in
                         self?.shouldActivatePinch?() ?? true
                     }

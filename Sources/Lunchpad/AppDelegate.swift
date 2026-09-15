@@ -296,36 +296,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installMultitouchMonitor() {
-        let controller = GestureMonitorController { [weak self] monitor in
-            self?.configureMultitouchMonitor(monitor)
+        let controller = GestureMonitorController { [weak self] monitor, fingerCount in
+            self?.configureMultitouchMonitor(monitor, fingerCount: fingerCount)
         }
         gestureMonitorController = controller
-        controller.setEnabled(preferences.fourFingerPinchEnabled)
+        let fingerCount = preferences.gestureFingerCount.rawValue
+        controller.setConfiguration(
+            enabled: preferences.gestureEnabled,
+            fingerCount: fingerCount
+        )
         if let error = controller.lastErrorDescription {
-            print("⚠️ Four-finger pinch monitor failed to start: \(error)")
+            print("⚠️ Trackpad gesture monitor failed to start: \(error)")
         } else if controller.isMonitoring {
-            print("Four-finger pinch monitor started")
+            print("\(fingerCount)-finger trackpad gesture monitor started")
         }
     }
 
-    private func configureMultitouchMonitor(_ monitor: any GestureMonitoring) {
-        let showDesktopStateDetector = ShowDesktopStateDetector()
+    private func configureMultitouchMonitor(
+        _ monitor: any GestureMonitoring,
+        fingerCount: Int
+    ) {
         let gestureDebugEnabled = ProcessInfo.processInfo.environment[
             "LUNCHPAD_GESTURE_DEBUG"
         ] == "1"
-        monitor.shouldActivatePinch = {
-            let evaluation = showDesktopStateDetector.evaluate()
-            if gestureDebugEnabled {
-                print(
-                    "[Gesture] showDesktop=\(evaluation.isActive) "
-                        + "visible=\(evaluation.visibleWindowCount) "
-                        + "displaced=\(evaluation.displacedWindowCount)"
-                )
+
+        // Only the system's four-finger inward gesture restores Show Desktop. Three-finger mode
+        // is independent and must remain available while the desktop is shown.
+        if fingerCount == GestureFingerCount.four.rawValue {
+            let showDesktopStateDetector = ShowDesktopStateDetector()
+            monitor.shouldActivatePinch = {
+                let evaluation = showDesktopStateDetector.evaluate()
+                if gestureDebugEnabled {
+                    print(
+                        "[Gesture] showDesktop=\(evaluation.isActive) "
+                            + "visible=\(evaluation.visibleWindowCount) "
+                            + "displaced=\(evaluation.displacedWindowCount)"
+                    )
+                }
+                return !evaluation.isActive
             }
-            return !evaluation.isActive
+            monitor.onPinchSuppressed = {
+                print("Show Desktop is active; leaving this four-finger pinch to macOS")
+            }
         }
         monitor.onPinch = { [weak self] in
-            print("Four-finger pinch completed; showing Lunchpad")
+            print("\(fingerCount)-finger pinch completed; showing Lunchpad")
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 // Resolve the pointer's display on the main actor so AppKit APIs are reached
@@ -334,18 +349,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         monitor.onExpand = { [weak self] in
-            print("Four-finger spread completed; hiding Lunchpad")
+            print("\(fingerCount)-finger spread completed; hiding Lunchpad")
             Task { @MainActor [weak self] in
                 self?.dismissLunchpad()
             }
         }
-        monitor.onPinchSuppressed = {
-            print("Show Desktop is active; leaving this pinch to macOS")
-        }
         if gestureDebugEnabled {
             monitor.onFrame = { [weak self] frame in
                 Task { @MainActor [weak self] in
-                    self?.printGestureDebugFrame(frame)
+                    self?.printGestureDebugFrame(frame, fingerCount: fingerCount)
                 }
             }
         }
@@ -369,7 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.show(on: targetScreen)
     }
 
-    /// Resolves the screen that should host the launcher when a four-finger pinch activates it.
+    /// Resolves the screen that should host the launcher when a trackpad pinch activates it.
     ///
     /// Samples `NSEvent.mouseLocation` on the main actor (the multitouch callback is off-thread)
     /// and selects the connected display whose frame contains that point. Falls back to
@@ -467,8 +479,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindowController?.refreshLocalizedContent()
         case .hotKey:
             settingsWindowController?.refreshLocalizedContent()
-        case .fourFingerPinch:
-            gestureMonitorController?.setEnabled(preferences.fourFingerPinchEnabled)
+        case .gestureEnabled, .gestureFingerCount:
+            gestureMonitorController?.setConfiguration(
+                enabled: preferences.gestureEnabled,
+                fingerCount: preferences.gestureFingerCount.rawValue
+            )
             settingsWindowController?.refreshLocalizedContent()
         }
     }
@@ -499,7 +514,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func printGestureDebugFrame(_ frame: MultitouchFrame) {
+    private func printGestureDebugFrame(_ frame: MultitouchFrame, fingerCount: Int) {
         let contacts = frame.activeContacts
         let now = ProcessInfo.processInfo.systemUptime
 
@@ -508,7 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             debugLastContactCount = contacts.count
         }
 
-        guard contacts.count == 4 else {
+        guard contacts.count == fingerCount else {
             debugMaximumDistance = nil
             return
         }
@@ -529,7 +544,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if now - debugLastPrintAt >= 0.1, let debugMaximumDistance {
             print(
-                "[Gesture] four-finger spread=\(String(format: "%.3f", distance)) "
+                "[Gesture] \(fingerCount)-finger spread=\(String(format: "%.3f", distance)) "
                     + "ratio=\(String(format: "%.3f", distance / debugMaximumDistance))"
             )
             debugLastPrintAt = now
