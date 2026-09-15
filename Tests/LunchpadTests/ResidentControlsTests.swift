@@ -37,11 +37,11 @@ final class ResidentControlsTests: XCTestCase {
 
     func testGestureDisableStopsAndReleasesCurrentMonitor() throws {
         let factory = FakeGestureFactory()
-        let controller = GestureMonitorController(factory: factory.make) { _ in }
-        controller.setEnabled(true)
+        let controller = GestureMonitorController(factory: factory.make) { _, _ in }
+        controller.setConfiguration(enabled: true, fingerCount: 4)
         let monitor = try XCTUnwrap(factory.monitors.first)
 
-        controller.setEnabled(false)
+        controller.setConfiguration(enabled: false, fingerCount: 4)
 
         XCTAssertEqual(monitor.stopCount, 1)
         XCTAssertFalse(controller.isMonitoring)
@@ -51,13 +51,13 @@ final class ResidentControlsTests: XCTestCase {
     func testGestureFailurePreservesIntentForFreshRetry() throws {
         let factory = FakeGestureFactory()
         factory.failNextStart = true
-        let controller = GestureMonitorController(factory: factory.make) { _ in }
+        let controller = GestureMonitorController(factory: factory.make) { _, _ in }
 
-        controller.setEnabled(true)
+        controller.setConfiguration(enabled: true, fingerCount: 4)
         XCTAssertFalse(controller.isMonitoring)
         XCTAssertNotNil(controller.lastErrorDescription)
 
-        controller.setEnabled(true)
+        controller.setConfiguration(enabled: true, fingerCount: 4)
         XCTAssertTrue(controller.isMonitoring)
         XCTAssertEqual(factory.monitors.count, 2)
     }
@@ -65,29 +65,58 @@ final class ResidentControlsTests: XCTestCase {
     func testGestureConfigureRunsForEveryFreshMonitor() {
         let factory = FakeGestureFactory()
         var configuredCount = 0
-        let controller = GestureMonitorController(factory: factory.make) { _ in
+        let controller = GestureMonitorController(factory: factory.make) { _, _ in
             configuredCount += 1
         }
 
-        controller.setEnabled(true)
-        controller.setEnabled(false)
-        controller.setEnabled(true)
+        controller.setConfiguration(enabled: true, fingerCount: 4)
+        controller.setConfiguration(enabled: false, fingerCount: 4)
+        controller.setConfiguration(enabled: true, fingerCount: 4)
 
         XCTAssertEqual(configuredCount, 2)
     }
 
     func testGestureRuntimeErrorReleasesMonitorAndCanRetry() {
         let factory = FakeGestureFactory()
-        let controller = GestureMonitorController(factory: factory.make) { _ in }
-        controller.setEnabled(true)
+        let controller = GestureMonitorController(factory: factory.make) { _, _ in }
+        controller.setConfiguration(enabled: true, fingerCount: 4)
 
         controller.reportRuntimeError(TestError.expected)
         XCTAssertFalse(controller.isMonitoring)
         XCTAssertNotNil(controller.lastErrorDescription)
 
-        controller.setEnabled(true)
+        controller.setConfiguration(enabled: true, fingerCount: 4)
         XCTAssertTrue(controller.isMonitoring)
         XCTAssertEqual(factory.monitors.count, 2)
+    }
+
+    func testChangingFingerCountRestartsMonitorWithNewConfiguration() throws {
+        let factory = FakeGestureFactory()
+        var configuredFingerCounts: [Int] = []
+        let controller = GestureMonitorController(factory: factory.make) { _, fingerCount in
+            configuredFingerCounts.append(fingerCount)
+        }
+        controller.setConfiguration(enabled: true, fingerCount: 4)
+        let originalMonitor = try XCTUnwrap(factory.monitors.first)
+
+        controller.setConfiguration(enabled: true, fingerCount: 3)
+
+        XCTAssertEqual(originalMonitor.stopCount, 1)
+        XCTAssertEqual(factory.monitors.map(\.fingerCount), [4, 3])
+        XCTAssertEqual(configuredFingerCounts, [4, 3])
+        XCTAssertEqual(controller.activeFingerCount, 3)
+        XCTAssertTrue(controller.isMonitoring)
+    }
+
+    func testApplyingSameFingerCountKeepsCurrentMonitor() {
+        let factory = FakeGestureFactory()
+        let controller = GestureMonitorController(factory: factory.make) { _, _ in }
+
+        controller.setConfiguration(enabled: true, fingerCount: 3)
+        controller.setConfiguration(enabled: true, fingerCount: 3)
+
+        XCTAssertEqual(factory.monitors.count, 1)
+        XCTAssertEqual(factory.monitors.first?.stopCount, 0)
     }
 }
 
@@ -113,8 +142,8 @@ private final class FakeGestureFactory {
     var failNextStart = false
     var monitors: [FakeGestureMonitor] = []
 
-    func make() -> any GestureMonitoring {
-        let monitor = FakeGestureMonitor()
+    func make(_ fingerCount: Int) -> any GestureMonitoring {
+        let monitor = FakeGestureMonitor(fingerCount: fingerCount)
         monitor.shouldFailStart = failNextStart
         failNextStart = false
         monitors.append(monitor)
@@ -123,6 +152,7 @@ private final class FakeGestureFactory {
 }
 
 private final class FakeGestureMonitor: GestureMonitoring {
+    let fingerCount: Int
     var shouldActivatePinch: (() -> Bool)?
     var onPinch: (() -> Void)?
     var onExpand: (() -> Void)?
@@ -131,6 +161,10 @@ private final class FakeGestureMonitor: GestureMonitoring {
     var onError: ((MultitouchMonitorError) -> Void)?
     var shouldFailStart = false
     var stopCount = 0
+
+    init(fingerCount: Int) {
+        self.fingerCount = fingerCount
+    }
 
     func start() throws {
         if shouldFailStart { throw TestError.expected }

@@ -29,8 +29,11 @@
 "settings.launch-at-login" = "Launch at Login";
 "settings.launch-at-login.development" = "Available when running the packaged application.";
 "settings.launch-at-login.error" = "Lunchpad could not update the login item: %@";
-"settings.four-finger-pinch" = "Four-Finger Pinch";
-"settings.four-finger-pinch.unavailable" = "Gesture activation is enabled but currently unavailable: %@";
+"settings.trackpad-gesture" = "Trackpad Gesture";
+"settings.trackpad-gesture.unavailable" = "Gesture activation is enabled but currently unavailable: %@";
+"settings.gesture-finger-count" = "Gesture Fingers";
+"settings.gesture-finger-count.three" = "Three Fingers";
+"settings.gesture-finger-count.four" = "Four Fingers";
 "settings.error.generic" = "The setting could not be applied: %@";
 "status.accessibility" = "Lunchpad";
 "settings.application-order.manual" = "Manual";

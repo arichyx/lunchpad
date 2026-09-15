@@ -27,7 +27,8 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.interfaceLanguage, .system)
         XCTAssertEqual(preferences.applicationSortOrder, .name)
         XCTAssertEqual(preferences.hotKey, .configured(.defaultConfiguration))
-        XCTAssertTrue(preferences.fourFingerPinchEnabled)
+        XCTAssertTrue(preferences.gestureEnabled)
+        XCTAssertEqual(preferences.gestureFingerCount, .four)
     }
 
     func testLegacyShortcutMigratesAndPersists() {
@@ -49,12 +50,35 @@ final class PreferencesTests: XCTestCase {
         defaults.set("unknown", forKey: "applicationSortOrder")
         defaults.set(Data("invalid".utf8), forKey: "globalHotKey")
         defaults.set(false, forKey: "fourFingerPinchEnabled")
+        defaults.set(7, forKey: "gestureFingerCount")
         let preferences = LunchpadPreferences(defaults: defaults)
 
         XCTAssertEqual(preferences.interfaceLanguage, .system)
         XCTAssertEqual(preferences.applicationSortOrder, .name)
         XCTAssertEqual(preferences.hotKey, .configured(.defaultConfiguration))
-        XCTAssertFalse(preferences.fourFingerPinchEnabled)
+        XCTAssertFalse(preferences.gestureEnabled)
+        XCTAssertEqual(preferences.gestureFingerCount, .four)
+    }
+
+    func testGestureFingerCountPersistsAndNotifies() {
+        let preferences = LunchpadPreferences(defaults: defaults)
+        var changes: [LunchpadPreferenceChange] = []
+        preferences.onChange = { changes.append($0) }
+
+        preferences.gestureFingerCount = .three
+
+        XCTAssertEqual(preferences.gestureFingerCount, .three)
+        XCTAssertEqual(defaults.integer(forKey: "gestureFingerCount"), 3)
+        XCTAssertEqual(changes, [.gestureFingerCount])
+    }
+
+    func testLegacyFourFingerEnabledKeyStillControlsGestureIntent() {
+        defaults.set(false, forKey: "fourFingerPinchEnabled")
+
+        let preferences = LunchpadPreferences(defaults: defaults)
+
+        XCTAssertFalse(preferences.gestureEnabled)
+        XCTAssertEqual(preferences.gestureFingerCount, .four)
     }
 
     func testStoredTimeOrderingValuesRemainDistinct() {
@@ -117,6 +141,8 @@ final class PreferencesTests: XCTestCase {
             chinese.string("settings.application-order.modification-date"),
             "修改时间"
         )
+        XCTAssertEqual(english.string("settings.gesture-finger-count.three"), "Three Fingers")
+        XCTAssertEqual(chinese.string("settings.gesture-finger-count.three"), "三指")
         XCTAssertEqual(chinese.string("missing.key"), "missing.key")
     }
 }

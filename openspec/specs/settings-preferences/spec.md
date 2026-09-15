@@ -34,8 +34,9 @@ activation policy or creating a persistent Dock icon.
 
 ### Requirement: Durable typed preferences
 
-Lunchpad SHALL persist interface language, application ordering, global shortcut, and four-finger
-activation intent as typed values in the `com.arichyx.Lunchpad` preferences domain.
+Lunchpad SHALL persist interface language, application ordering, global shortcut, trackpad gesture
+activation intent, and the selected three- or four-finger count as typed values in the
+`com.arichyx.Lunchpad` preferences domain.
 
 #### Scenario: User changes a preference
 
@@ -45,7 +46,7 @@ activation intent as typed values in the `com.arichyx.Lunchpad` preferences doma
 #### Scenario: No stored preference exists
 
 - **WHEN** Lunchpad loads a setting for the first time
-- **THEN** it uses Follow System language, name ordering, Control-Shift-Space, disabled Launch at Login, and enabled Four-Finger Pinch defaults
+- **THEN** it uses Follow System language, name ordering, Control-Shift-Space, disabled Launch at Login, enabled Trackpad Gesture, and Four Fingers defaults
 
 #### Scenario: Stored preference data is invalid
 
@@ -110,8 +111,18 @@ validation feedback.
 
 ### Requirement: Focused resident behavior controls
 
-Lunchpad SHALL expose Launch at Login and Four-Finger Pinch switches and SHALL show failures without
-silently presenting a state that was not applied.
+Lunchpad SHALL expose Launch at Login and Trackpad Gesture switches, a Three Fingers or Four Fingers
+selector, and failures without silently presenting a state that was not applied.
+
+#### Scenario: User changes the gesture finger count
+
+- **WHEN** the user changes Gesture Fingers while gesture monitoring is enabled
+- **THEN** Lunchpad restarts the trackpad monitor with the selected count without requiring a process restart
+
+#### Scenario: Existing installation has no finger-count preference
+
+- **WHEN** an existing installation upgrades with its previous Four-Finger Pinch enabled state but no stored finger count
+- **THEN** Lunchpad preserves that enabled state and selects Four Fingers
 
 #### Scenario: Login registration fails
 
@@ -120,5 +131,5 @@ silently presenting a state that was not applied.
 
 #### Scenario: Gesture monitoring is unavailable
 
-- **WHEN** Four-Finger Pinch is enabled but the trackpad monitor cannot start
+- **WHEN** Trackpad Gesture is enabled but the trackpad monitor cannot start
 - **THEN** Settings preserves the enabled intent and displays that gesture activation is currently unavailable

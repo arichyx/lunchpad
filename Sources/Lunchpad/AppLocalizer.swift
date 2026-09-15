@@ -59,8 +59,16 @@ final class AppLocalizer {
 
     private func localizedString(_ key: String, language: ResolvedLanguage) -> String {
         let resourceName = language.rawValue.lowercased()
-        guard let path = resourceBundle.path(forResource: resourceName, ofType: "lproj"),
-              let languageBundle = Bundle(path: path) else {
+        // A localization directory is not an ordinary resource: on macOS 27,
+        // path(forResource:ofType:) may resolve it through the process's preferred localization
+        // and return the English directory even when zh-Hans was requested explicitly.
+        guard let resourceURL = resourceBundle.resourceURL else { return key }
+        // SwiftPM toolchains use either zh-hans.lproj or zh-Hans.lproj. Try both exact names
+        // so explicit language selection also works on case-sensitive volumes.
+        let directoryNames = [resourceName, language.rawValue]
+        guard let languageBundle = directoryNames.lazy.compactMap({ name in
+            Bundle(url: resourceURL.appendingPathComponent("\(name).lproj", isDirectory: true))
+        }).first else {
             return key
         }
         return languageBundle.localizedString(forKey: key, value: key, table: "Localizable")

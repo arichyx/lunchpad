@@ -20,12 +20,14 @@ final class SettingsWindowController: NSWindowController {
     private let shortcutLabel = NSTextField(labelWithString: "")
     private let loginItemLabel = NSTextField(labelWithString: "")
     private let gestureLabel = NSTextField(labelWithString: "")
+    private let gestureFingerCountLabel = NSTextField(labelWithString: "")
     private let languagePopup = NSPopUpButton()
     private let orderPopup = NSPopUpButton()
     private let shortcutRecorder: ShortcutRecorderView
     private let clearShortcutButton = NSButton()
     private let loginItemSwitch = NSSwitch()
     private let gestureSwitch = NSSwitch()
+    private let gestureFingerCountPopup = NSPopUpButton()
     private let feedbackLabel = NSTextField(wrappingLabelWithString: "")
     private var transientFeedback: Feedback?
 
@@ -73,15 +75,17 @@ final class SettingsWindowController: NSWindowController {
         orderLabel.stringValue = localizer.string("settings.application-order")
         shortcutLabel.stringValue = localizer.string("settings.shortcut")
         loginItemLabel.stringValue = localizer.string("settings.launch-at-login")
-        gestureLabel.stringValue = localizer.string("settings.four-finger-pinch")
+        gestureLabel.stringValue = localizer.string("settings.trackpad-gesture")
+        gestureFingerCountLabel.stringValue = localizer.string("settings.gesture-finger-count")
         clearShortcutButton.title = localizer.string("settings.shortcut.clear")
 
         rebuildLanguagePopup()
         rebuildOrderPopup()
+        rebuildGestureFingerCountPopup()
         refreshShortcutState()
         loginItemSwitch.isEnabled = loginItemController.isAvailable
         loginItemSwitch.state = loginItemController.isEnabled ? .on : .off
-        gestureSwitch.state = preferences.fourFingerPinchEnabled ? .on : .off
+        gestureSwitch.state = preferences.gestureEnabled ? .on : .off
         refreshFeedback()
     }
 
@@ -92,7 +96,14 @@ final class SettingsWindowController: NSWindowController {
 
         configureSectionTitle(appearanceTitle)
         configureSectionTitle(activationTitle)
-        [languageLabel, orderLabel, shortcutLabel, loginItemLabel, gestureLabel].forEach {
+        [
+            languageLabel,
+            orderLabel,
+            shortcutLabel,
+            loginItemLabel,
+            gestureLabel,
+            gestureFingerCountLabel,
+        ].forEach {
             $0.alignment = .right
             $0.translatesAutoresizingMaskIntoConstraints = false
             $0.widthAnchor.constraint(equalToConstant: 150).isActive = true
@@ -102,6 +113,8 @@ final class SettingsWindowController: NSWindowController {
         languagePopup.action = #selector(languageChanged(_:))
         orderPopup.target = self
         orderPopup.action = #selector(orderChanged(_:))
+        gestureFingerCountPopup.target = self
+        gestureFingerCountPopup.action = #selector(gestureFingerCountChanged(_:))
 
         shortcutRecorder.onCandidate = { [weak self] configuration in
             self?.applyShortcut(.configured(configuration))
@@ -140,6 +153,7 @@ final class SettingsWindowController: NSWindowController {
             makeRow(label: shortcutLabel, control: shortcutControls),
             makeRow(label: loginItemLabel, control: loginItemSwitch),
             makeRow(label: gestureLabel, control: gestureSwitch),
+            makeRow(label: gestureFingerCountLabel, control: gestureFingerCountPopup),
             feedbackLabel,
         ])
         stack.orientation = .vertical
@@ -150,6 +164,7 @@ final class SettingsWindowController: NSWindowController {
 
         languagePopup.widthAnchor.constraint(equalToConstant: 230).isActive = true
         orderPopup.widthAnchor.constraint(equalToConstant: 230).isActive = true
+        gestureFingerCountPopup.widthAnchor.constraint(equalToConstant: 230).isActive = true
         feedbackLabel.widthAnchor.constraint(equalToConstant: 490).isActive = true
 
         NSLayoutConstraint.activate([
@@ -205,6 +220,20 @@ final class SettingsWindowController: NSWindowController {
         orderPopup.selectItem(at: index)
     }
 
+    private func rebuildGestureFingerCountPopup() {
+        gestureFingerCountPopup.removeAllItems()
+        let values: [(GestureFingerCount, String)] = [
+            (.three, localizer.string("settings.gesture-finger-count.three")),
+            (.four, localizer.string("settings.gesture-finger-count.four")),
+        ]
+        for (index, value) in values.enumerated() {
+            gestureFingerCountPopup.addItem(withTitle: value.1)
+            gestureFingerCountPopup.item(at: index)?.representedObject = value.0.rawValue
+        }
+        let index = values.firstIndex { $0.0 == preferences.gestureFingerCount } ?? 1
+        gestureFingerCountPopup.selectItem(at: index)
+    }
+
     private func refreshShortcutState() {
         let managed = hotKeyController.isExternallyManaged
         shortcutRecorder.configuration = managed
@@ -245,7 +274,7 @@ final class SettingsWindowController: NSWindowController {
         } else if hotKeyController.lastError != nil {
             feedback = .key("settings.shortcut.unavailable")
         } else if let gestureError = gestureErrorProvider() {
-            feedback = .formatted("settings.four-finger-pinch.unavailable", gestureError)
+            feedback = .formatted("settings.trackpad-gesture.unavailable", gestureError)
         } else if !loginItemController.isAvailable {
             feedback = .key("settings.launch-at-login.development")
         } else {
@@ -296,7 +325,15 @@ final class SettingsWindowController: NSWindowController {
     }
 
     @objc private func gestureChanged(_ sender: NSSwitch) {
-        preferences.fourFingerPinchEnabled = sender.state == .on
+        preferences.gestureEnabled = sender.state == .on
+        transientFeedback = nil
+        refreshFeedback()
+    }
+
+    @objc private func gestureFingerCountChanged(_ sender: NSPopUpButton) {
+        guard let rawValue = sender.selectedItem?.representedObject as? Int,
+              let fingerCount = GestureFingerCount(rawValue: rawValue) else { return }
+        preferences.gestureFingerCount = fingerCount
         transientFeedback = nil
         refreshFeedback()
     }

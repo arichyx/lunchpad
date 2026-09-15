@@ -37,6 +37,11 @@ enum ApplicationSortOrder: String, CaseIterable {
     case modificationDate
 }
 
+enum GestureFingerCount: Int, CaseIterable {
+    case three = 3
+    case four = 4
+}
+
 struct HotKeyConfiguration: Codable, Equatable {
     static let allowedModifiers = UInt32(cmdKey | optionKey | controlKey | shiftKey)
     static let defaultConfiguration = HotKeyConfiguration(
@@ -167,7 +172,8 @@ enum LunchpadPreferenceChange: Equatable {
     case interfaceLanguage
     case applicationSortOrder
     case hotKey
-    case fourFingerPinch
+    case gestureEnabled
+    case gestureFingerCount
 }
 
 @MainActor
@@ -178,7 +184,9 @@ final class LunchpadPreferences {
         static let interfaceLanguage = "interfaceLanguage"
         static let applicationSortOrder = "applicationSortOrder"
         static let globalHotKey = "globalHotKey"
-        static let fourFingerPinch = "fourFingerPinchEnabled"
+        // Keep the existing storage key so upgrades preserve the user's enabled state.
+        static let gestureEnabled = "fourFingerPinchEnabled"
+        static let gestureFingerCount = "gestureFingerCount"
     }
 
     private struct HotKeyPayload: Codable {
@@ -233,15 +241,30 @@ final class LunchpadPreferences {
         }
     }
 
-    var fourFingerPinchEnabled: Bool {
+    var gestureEnabled: Bool {
         get {
-            guard defaults.object(forKey: Key.fourFingerPinch) != nil else { return true }
-            return defaults.bool(forKey: Key.fourFingerPinch)
+            guard defaults.object(forKey: Key.gestureEnabled) != nil else { return true }
+            return defaults.bool(forKey: Key.gestureEnabled)
         }
         set {
-            guard newValue != fourFingerPinchEnabled else { return }
-            defaults.set(newValue, forKey: Key.fourFingerPinch)
-            onChange?(.fourFingerPinch)
+            guard newValue != gestureEnabled else { return }
+            defaults.set(newValue, forKey: Key.gestureEnabled)
+            onChange?(.gestureEnabled)
+        }
+    }
+
+    var gestureFingerCount: GestureFingerCount {
+        get {
+            guard let stored = defaults.object(forKey: Key.gestureFingerCount) as? NSNumber,
+                  let fingerCount = GestureFingerCount(rawValue: stored.intValue) else {
+                return .four
+            }
+            return fingerCount
+        }
+        set {
+            guard newValue != gestureFingerCount else { return }
+            defaults.set(newValue.rawValue, forKey: Key.gestureFingerCount)
+            onChange?(.gestureFingerCount)
         }
     }
 

@@ -3,7 +3,7 @@
 Lunchpad brings the classic full-screen macOS app launcher back to macOS 26 Tahoe.
 
 It is built with AppKit and follows the familiar Launchpad experience: open it with a
-four-finger pinch, browse apps page by page, search by name, open logical folders, and launch an
+three- or four-finger pinch, browse apps page by page, search by name, open logical folders, and launch an
 app with one click. The name is intentional: Lunchpad is to Launchpad what `reqwest` is to
 `request`.
 
@@ -12,7 +12,7 @@ app with one click. The name is intentional: Lunchpad is to Launchpad what `reqw
 ## Highlights
 
 - Native full-screen AppKit interface
-- Four-finger pinch activation and spread-to-dismiss
+- Configurable three- or four-finger pinch activation and spread-to-dismiss
 - Paged app grid with two-finger horizontal swiping and pointer drag paging
 - Search using localized application names and nonlocalized bundle names
 - Logical folders, including the default Other folder
@@ -30,7 +30,7 @@ app with one click. The name is intentional: Lunchpad is to Launchpad what `reqw
 - Apple Silicon
 - Swift 6 and the Xcode command-line tools when building from source
 
-The four-finger gesture has currently been verified with a built-in Force Touch trackpad.
+The direct trackpad input path has currently been verified with a built-in Force Touch trackpad.
 
 ## Build and install
 
@@ -68,11 +68,11 @@ account. A copy downloaded from the internet may need to be approved once in
 
 Lunchpad starts quietly in the menu bar and does not open the full-screen interface at launch.
 
-- Pinch inward with four fingers to show Lunchpad.
-- Spread outward with four fingers (the reverse of the opening pinch) to close Lunchpad while it
-  is visible. The gesture is recognized only while Lunchpad is on screen.
-- When macOS is showing the desktop, an inward pinch restores the displaced windows without
-  opening Lunchpad, regardless of how Show Desktop was entered.
+- Pinch inward with the configured three or four fingers to show Lunchpad.
+- Spread outward with the configured finger count (the reverse of the opening pinch) to close
+  Lunchpad while it is visible. The gesture is recognized only while Lunchpad is on screen.
+- In four-finger mode, when macOS is showing the desktop, an inward pinch restores the displaced
+  windows without opening Lunchpad, regardless of how Show Desktop was entered.
 - Alternatively, press Control-Shift-Space or left-click the menu bar icon.
 - Change pages with a two-finger horizontal swipe, a sideways drag on empty space, the arrow
   keys, or a page dot. Swipes and drags move the page with your fingers; release past a
@@ -83,8 +83,15 @@ Lunchpad starts quietly in the menu bar and does not open the full-screen interf
 - Press Escape or click empty space to leave a folder or close Lunchpad.
 - Right-click the menu bar icon for Show, Settings, and Quit actions.
 
-If macOS performs another action for the same four-finger gesture, disable Four-Finger Pinch in
-Lunchpad Settings or change the system gesture in System Settings.
+If macOS performs another action for the same four-finger gesture, select Three Fingers in
+Lunchpad Settings, disable Trackpad Gesture, or change the system gesture in System Settings.
+
+When using **Four Fingers**, we recommend turning off the system's **App / Apps** pinch gesture
+under **System Settings → Trackpad → More Gestures** (pinch the thumb and three fingers together).
+Otherwise, both Lunchpad and Spotlight's Apps view may open. This is separate from **Show Desktop**
+(spread the thumb and three fingers apart); leave Show Desktop enabled if you use it. If the system
+App / Apps switch cannot be turned off or does not retain its state, choose **Three Fingers** in
+Lunchpad instead.
 
 ## Settings
 
@@ -102,8 +109,11 @@ immediately and are stored locally.
   not provide a complete public registry of every application-level or system shortcut, so a
   successfully registered combination can still overlap behavior handled above Carbon.
 - **Launch at Login** uses the macOS login-item service and is available in the packaged app.
-- **Four-Finger Pinch** can stop or restart the existing trackpad monitor without restarting
-  Lunchpad.
+- **Trackpad Gesture** can stop or restart the existing trackpad monitor without restarting
+  Lunchpad. **Gesture Fingers** selects strict three-finger recognition or four-finger recognition;
+  changing it restarts the monitor immediately. Three-finger mode rejects a contact sequence that
+  reaches four fingers so it does not claim macOS's four-finger system gestures. Four Fingers is
+  the default and preserves the Show Desktop restoration behavior.
 
 The default shortcut is Control-Shift-Space. For development and hardware testing,
 `LUNCHPAD_HOTKEY` can override the stored setting for one process:

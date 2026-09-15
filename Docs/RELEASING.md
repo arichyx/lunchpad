@@ -4,6 +4,9 @@ Lunchpad uses a tag-driven GitHub Actions workflow. Release artifacts are always
 tagged source on GitHub's Apple Silicon macOS 26 runner rather than uploaded from a developer
 machine.
 
+The packaging helpers accept both flat SwiftPM resource bundles and the standard
+`Contents/Resources` bundle layout produced by newer toolchains.
+
 ## Versioning
 
 Stable release tags use `vMAJOR.MINOR.PATCH`, for example `v0.1.0`. Prerelease tags append a
