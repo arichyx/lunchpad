@@ -32,7 +32,8 @@ jobs:
           swift --version
 
       - name: Run tests
-        run: swift test --package-path "$GITHUB_WORKSPACE"
+        # Test classes run in separate processes; the release workflow keeps a serial run.
+        run: swift test --package-path "$GITHUB_WORKSPACE" --parallel
 
       - name: Build release artifacts
         env:

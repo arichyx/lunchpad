@@ -76,12 +76,13 @@ final class ResidentControlsTests: XCTestCase {
         XCTAssertEqual(configuredCount, 2)
     }
 
-    func testGestureRuntimeErrorReleasesMonitorAndCanRetry() {
+    func testGestureRuntimeErrorReleasesMonitorAndCanRetry() throws {
         let factory = FakeGestureFactory()
         let controller = GestureMonitorController(factory: factory.make) { _, _ in }
         controller.setConfiguration(enabled: true, fingerCount: 4)
+        let monitor = try XCTUnwrap(factory.monitors.first)
 
-        controller.reportRuntimeError(TestError.expected)
+        controller.reportRuntimeError(TestError.expected, from: monitor)
         XCTAssertFalse(controller.isMonitoring)
         XCTAssertNotNil(controller.lastErrorDescription)
 
@@ -106,6 +107,74 @@ final class ResidentControlsTests: XCTestCase {
         XCTAssertEqual(configuredFingerCounts, [4, 3])
         XCTAssertEqual(controller.activeFingerCount, 3)
         XCTAssertTrue(controller.isMonitoring)
+    }
+
+    func testLateErrorFromReplacedMonitorDoesNotStopItsSuccessor() throws {
+        let factory = FakeGestureFactory()
+        let controller = GestureMonitorController(factory: factory.make) { _, _ in }
+        controller.setConfiguration(enabled: true, fingerCount: 4)
+        let replacedMonitor = try XCTUnwrap(factory.monitors.first)
+        controller.setConfiguration(enabled: true, fingerCount: 3)
+        let currentMonitor = try XCTUnwrap(factory.monitors.last)
+
+        controller.reportRuntimeError(TestError.expected, from: replacedMonitor)
+
+        XCTAssertTrue(controller.isMonitoring)
+        XCTAssertEqual(controller.activeFingerCount, 3)
+        XCTAssertEqual(currentMonitor.stopCount, 0)
+        XCTAssertNil(controller.lastErrorDescription)
+    }
+
+    func testRestartRebuildsMonitorAfterRuntimeError() throws {
+        let factory = FakeGestureFactory()
+        let controller = GestureMonitorController(factory: factory.make) { _, _ in }
+        controller.setConfiguration(enabled: true, fingerCount: 3)
+        controller.reportRuntimeError(TestError.expected, from: try XCTUnwrap(factory.monitors.first))
+
+        controller.restartIfEnabled()
+
+        XCTAssertTrue(controller.isMonitoring)
+        XCTAssertEqual(controller.activeFingerCount, 3)
+        XCTAssertNil(controller.lastErrorDescription)
+        XCTAssertEqual(factory.monitors.count, 2)
+    }
+
+    func testRestartReplacesRunningMonitor() throws {
+        let factory = FakeGestureFactory()
+        let controller = GestureMonitorController(factory: factory.make) { _, _ in }
+        controller.setConfiguration(enabled: true, fingerCount: 4)
+        let original = try XCTUnwrap(factory.monitors.first)
+
+        controller.restartIfEnabled()
+
+        XCTAssertEqual(original.stopCount, 1)
+        XCTAssertEqual(factory.monitors.count, 2)
+        XCTAssertTrue(controller.isMonitoring)
+    }
+
+    func testRestartKeepsDisabledGesturesStopped() {
+        let factory = FakeGestureFactory()
+        let controller = GestureMonitorController(factory: factory.make) { _, _ in }
+        controller.setConfiguration(enabled: true, fingerCount: 4)
+        controller.setConfiguration(enabled: false, fingerCount: 4)
+
+        controller.restartIfEnabled()
+
+        XCTAssertFalse(controller.isMonitoring)
+        XCTAssertEqual(factory.monitors.count, 1)
+    }
+
+    func testScheduledRestartsCoalesce() {
+        let factory = FakeGestureFactory()
+        let controller = GestureMonitorController(factory: factory.make) { _, _ in }
+        controller.setConfiguration(enabled: true, fingerCount: 4)
+        let restarted = expectation(description: "restart")
+
+        controller.scheduleRestart(after: 0.05) { XCTFail("Superseded restart ran") }
+        controller.scheduleRestart(after: 0.05) { restarted.fulfill() }
+
+        wait(for: [restarted], timeout: 2)
+        XCTAssertEqual(factory.monitors.count, 2)
     }
 
     func testApplyingSameFingerCountKeepsCurrentMonitor() {

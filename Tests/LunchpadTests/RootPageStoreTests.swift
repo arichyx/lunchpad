@@ -7,20 +7,20 @@ final class RootPageStoreTests: XCTestCase {
     private var defaults: UserDefaults!
     private var now: Date!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         suiteName = "LunchpadTests.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
         defaults.removePersistentDomain(forName: suiteName)
         now = Date(timeIntervalSince1970: 1_700_000_000)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         defaults.removePersistentDomain(forName: suiteName)
         defaults = nil
         suiteName = nil
         now = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func makeStore() -> RootPageStore {

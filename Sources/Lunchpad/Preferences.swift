@@ -176,9 +176,24 @@ enum LunchpadPreferenceChange: Equatable {
     case gestureFingerCount
 }
 
+/// Opens Lunchpad's preference domain. The packaged app owns the domain as its standard defaults;
+/// passing its own bundle identifier as a suite name is rejected by CFPreferences with a console
+/// warning. The unbundled development executable has no bundle identifier and opens the suite.
+enum LunchpadDefaults {
+    static func make(
+        domain: String = LunchpadPreferences.domain,
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier
+    ) -> UserDefaults {
+        if bundleIdentifier == domain {
+            return .standard
+        }
+        return UserDefaults(suiteName: domain) ?? .standard
+    }
+}
+
 @MainActor
 final class LunchpadPreferences {
-    static let domain = "com.arichyx.Lunchpad"
+    nonisolated static let domain = "com.arichyx.Lunchpad"
 
     private enum Key {
         static let interfaceLanguage = "interfaceLanguage"
@@ -199,7 +214,7 @@ final class LunchpadPreferences {
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults? = nil) {
-        self.defaults = defaults ?? UserDefaults(suiteName: Self.domain) ?? .standard
+        self.defaults = defaults ?? LunchpadDefaults.make()
     }
 
     var interfaceLanguage: InterfaceLanguage {

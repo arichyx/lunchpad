@@ -7,18 +7,18 @@ final class PreferencesTests: XCTestCase {
     private var suiteName: String!
     private var defaults: UserDefaults!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         suiteName = "LunchpadTests.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
         defaults.removePersistentDomain(forName: suiteName)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         defaults.removePersistentDomain(forName: suiteName)
         defaults = nil
         suiteName = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     func testDefaults() {
@@ -144,5 +144,16 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(english.string("settings.gesture-finger-count.three"), "Three Fingers")
         XCTAssertEqual(chinese.string("settings.gesture-finger-count.three"), "三指")
         XCTAssertEqual(chinese.string("missing.key"), "missing.key")
+    }
+
+    func testPackagedAppUsesStandardDefaultsForItsOwnDomain() {
+        XCTAssertTrue(
+            LunchpadDefaults.make(domain: "com.example.App", bundleIdentifier: "com.example.App")
+                === UserDefaults.standard
+        )
+        XCTAssertFalse(
+            LunchpadDefaults.make(domain: "com.example.App", bundleIdentifier: nil)
+                === UserDefaults.standard
+        )
     }
 }

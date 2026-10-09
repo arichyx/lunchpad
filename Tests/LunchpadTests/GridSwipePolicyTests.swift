@@ -195,21 +195,21 @@ final class GridSwipeInteractionTests: XCTestCase {
     private var collectionView: LunchpadCollectionView!
     private var backgroundClicks = 0
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         makeGrid(itemCount: 70)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         grid = nil
         window = nil
         collectionView = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
-    private func makeGrid(itemCount: Int) {
+    private func makeGrid(itemCount: Int, firstItemName: String? = nil) {
         let items = (0..<itemCount).map { index in
-            LunchpadItem.app(app("App\(index)"))
+            LunchpadItem.app(app(index == 0 ? firstItemName ?? "App0" : "App\(index)"))
         }
         grid = IconGridView(items: items, localizer: AppLocalizer(language: .english))
         window = NSWindow(
@@ -748,6 +748,53 @@ final class GridSwipeInteractionTests: XCTestCase {
             icon.frame.minY,
             label.frame.minY,
             "The icon sits above its label, matching the real cells"
+        )
+    }
+
+    /// A snapshot label must give the name the same text area as the cell it stands in for. The
+    /// cell lays its label out by alignment rect, which a text field's frame overhangs on both
+    /// sides; when the snapshot used the bare slot width, a name that just fits in the cell
+    /// ("DBeaver Community") was truncated for the duration of every swipe.
+    func testSwipePagerLabelsMatchGridCellLabels() throws {
+        makeGrid(itemCount: 70, firstItemName: "DBeaver Community")
+        try XCTSkipUnless(collectionView.frame.width > 100)
+        let start = try XCTUnwrap(backgroundPoint())
+
+        try swipeBackground(from: start, dx: -60)
+        XCTAssertTrue(grid.isSwipePagingActive)
+        let clipView = try XCTUnwrap(
+            grid.subviews.compactMap { $0 as? IconGridView.SwipePagerView }.first
+        )
+        let currentPageSnapshot = try XCTUnwrap(clipView.subviews.first?.subviews.first)
+        let snapshotItem = try XCTUnwrap(currentPageSnapshot.subviews.first)
+        let snapshotLabel = try XCTUnwrap(
+            snapshotItem.subviews.compactMap { $0 as? NSTextField }.first
+        )
+        let realCell = try XCTUnwrap(collectionView.item(at: IndexPath(item: 0, section: 0)))
+        let cellLabel = try XCTUnwrap(
+            realCell.view.subviews.compactMap { $0 as? NSTextField }.first
+        )
+        XCTAssertEqual(snapshotLabel.stringValue, "DBeaver Community")
+        XCTAssertEqual(snapshotLabel.font, cellLabel.font)
+
+        let snapshotFrame = grid.convert(snapshotLabel.frame, from: snapshotItem)
+        let cellFrame = grid.convert(cellLabel.frame, from: realCell.view)
+        XCTAssertEqual(
+            snapshotFrame.minX,
+            cellFrame.minX + grid.swipePagerTranslation,
+            accuracy: 0.5
+        )
+        XCTAssertEqual(
+            snapshotFrame.width,
+            cellFrame.width,
+            accuracy: 0.5,
+            "The snapshot truncates exactly where the cell does"
+        )
+        XCTAssertEqual(
+            snapshotFrame.maxY,
+            cellFrame.maxY,
+            accuracy: 0.5,
+            "Both labels start the same distance below the icon"
         )
     }
 

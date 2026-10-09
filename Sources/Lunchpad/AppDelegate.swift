@@ -25,9 +25,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyController: HotKeyController?
     private let loginItemController = LoginItemController()
     private var gestureMonitorController: GestureMonitorController?
+    private var multitouchDeviceObserver: MultitouchDeviceObserver?
+    private var wakeObserver: NSObjectProtocol?
     private var settingsWindowController: SettingsWindowController?
     private var workspaceActivationObserver: NSObjectProtocol?
     private var activeSpaceChangeObserver: NSObjectProtocol?
+    private var screenParametersObserver: NSObjectProtocol?
     private var statusItem: NSStatusItem?
     private var statusMenu: NSMenu?
     private var debugLastContactCount = -1
@@ -42,9 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let openedStore = try LunchpadLayoutStore()
             layoutStore = openedStore
-            print("Layout database: \(openedStore.databaseURL.path)")
+            Log.layout.notice("Layout database: \(openedStore.databaseURL.path)")
         } catch {
-            print("⚠️ Layout database unavailable, using flat layout: \(error)")
+            Log.layout.error("Layout database unavailable, using flat layout: \(error)")
         }
 
         let synchronizer = ApplicationCatalogSynchronizer(
@@ -62,9 +65,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             // Start monitoring before the initial scan to cover changes that race with startup.
             try synchronizer.start()
-            print("Application directory monitor started")
+            Log.catalog.notice("Application directory monitor started")
         } catch {
-            print("⚠️ Failed to start application directory monitor: \(error)")
+            Log.catalog.error("Failed to start application directory monitor: \(error)")
         }
         catalogSynchronizer = synchronizer
 
@@ -80,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if case .folder = item { return count + 1 }
             return count
         }
-        print("Scan complete: \(appCount) apps, \(folderCount) folders")
+        Log.catalog.notice("Scan complete: \(appCount) apps, \(folderCount) folders")
         window = LunchpadWindow(
             items: presentedItems(from: items),
             localizer: localizer,
@@ -90,6 +93,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window?.onDragCommit = { [weak self] commit in
             self?.handleDragCommit(commit)
         }
+        window?.onLaunchFailure = { [weak self] app, error in
+            self?.presentLaunchFailure(for: app, error: error)
+        }
+        window?.onFolderRename = { [weak self] identifier, name in
+            self?.applyLayoutEdit("Folder rename") { store in
+                try store.renameFolder(identifier: identifier, name: name)
+            }
+        }
+        window?.onFolderDelete = { [weak self] identifier in
+            self?.applyLayoutEdit("Folder deletion") { store in
+                try store.deleteFolder(identifier: identifier)
+            }
+        }
 
         installStatusItem()
         installApplicationMenu()
@@ -97,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installMultitouchMonitor()
         installWorkspaceActivationObserver()
         installActiveSpaceChangeObserver()
+        installScreenParametersObserver()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -108,6 +125,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let activeSpaceChangeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(activeSpaceChangeObserver)
         }
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+        if let screenParametersObserver {
+            NotificationCenter.default.removeObserver(screenParametersObserver)
+        }
+        multitouchDeviceObserver = nil
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -125,17 +149,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard let configuration = controller.activeConfiguration else {
             if let error = controller.lastError {
-                print("⚠️ Global hot key registration failed: \(error)")
+                Log.hotKey.error("Global hot key registration failed: \(error)")
             } else {
-                print("Global hot key disabled")
+                Log.hotKey.notice("Global hot key disabled")
             }
             return
         }
 
         if controller.isExternallyManaged {
-            print("Global hot key registered from LUNCHPAD_HOTKEY: \(configuration.displayName)")
+            Log.hotKey.notice(
+                "Global hot key registered from LUNCHPAD_HOTKEY: \(configuration.displayName)"
+            )
         } else {
-            print("Global hot key registered: \(configuration.displayName)")
+            Log.hotKey.notice("Global hot key registered: \(configuration.displayName)")
         }
     }
 
@@ -295,6 +321,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Follows display reconfigurations while the launcher is visible; see
+    /// `LunchpadWindow.screenParametersDidChange()`.
+    private func installScreenParametersObserver() {
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.window?.screenParametersDidChange()
+            }
+        }
+    }
+
     private func installMultitouchMonitor() {
         let controller = GestureMonitorController { [weak self] monitor, fingerCount in
             self?.configureMultitouchMonitor(monitor, fingerCount: fingerCount)
@@ -306,9 +346,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fingerCount: fingerCount
         )
         if let error = controller.lastErrorDescription {
-            print("⚠️ Trackpad gesture monitor failed to start: \(error)")
+            Log.gesture.error("Trackpad gesture monitor failed to start: \(error)")
         } else if controller.isMonitoring {
-            print("\(fingerCount)-finger trackpad gesture monitor started")
+            Log.gesture.notice("\(fingerCount)-finger trackpad gesture monitor started")
+        }
+        installMultitouchRecovery()
+    }
+
+    /// Rebuilds the gesture monitor after wake and whenever a multitouch device appears or
+    /// disappears, so a lost driver stream or a reconnected trackpad does not leave gestures
+    /// unavailable until the user toggles the setting.
+    private func installMultitouchRecovery() {
+        do {
+            multitouchDeviceObserver = try MultitouchDeviceObserver { [weak self] in
+                MainActor.assumeIsolated {
+                    Log.gesture.notice(
+                        "Multitouch device changed; restarting the trackpad gesture monitor"
+                    )
+                    self?.scheduleGestureMonitorRestart()
+                }
+            }
+        } catch {
+            Log.gesture.error("Multitouch device notifications unavailable: \(error)")
+        }
+
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.scheduleGestureMonitorRestart()
+            }
+        }
+    }
+
+    private func scheduleGestureMonitorRestart() {
+        gestureMonitorController?.scheduleRestart { [weak self] in
+            guard let self, let controller = self.gestureMonitorController else { return }
+            if let error = controller.lastErrorDescription {
+                Log.gesture.error("Trackpad gesture monitor failed to restart: \(error)")
+            }
+            self.settingsWindowController?.refreshLocalizedContent()
         }
     }
 
@@ -327,7 +406,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             monitor.shouldActivatePinch = {
                 let evaluation = showDesktopStateDetector.evaluate()
                 if gestureDebugEnabled {
-                    print(
+                    Log.gesture.debug(
                         "[Gesture] showDesktop=\(evaluation.isActive) "
                             + "visible=\(evaluation.visibleWindowCount) "
                             + "displaced=\(evaluation.displacedWindowCount)"
@@ -336,20 +415,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return !evaluation.isActive
             }
             monitor.onPinchSuppressed = {
-                print("Show Desktop is active; leaving this four-finger pinch to macOS")
+                Log.gesture.notice("Show Desktop is active; leaving this four-finger pinch to macOS")
             }
         }
         monitor.onPinch = { [weak self] in
-            print("\(fingerCount)-finger pinch completed; showing Lunchpad")
+            Log.gesture.notice("\(fingerCount)-finger pinch completed; showing Lunchpad")
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 // Resolve the pointer's display on the main actor so AppKit APIs are reached
                 // safely and the screen list cannot change between sampling and presentation.
-                self.showLunchpad(targetScreen: self.screenForPinchActivation())
+                self.showLunchpad(targetScreen: self.screenForPointer())
             }
         }
         monitor.onExpand = { [weak self] in
-            print("\(fingerCount)-finger spread completed; hiding Lunchpad")
+            Log.gesture.notice("\(fingerCount)-finger spread completed; hiding Lunchpad")
             Task { @MainActor [weak self] in
                 self?.dismissLunchpad()
             }
@@ -361,17 +440,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        monitor.onError = { [weak self] error in
-            print("⚠️ Trackpad data stream stopped: \(error)")
-            Task { @MainActor [weak self] in
-                self?.gestureMonitorController?.reportRuntimeError(error)
-                self?.settingsWindowController?.refreshLocalizedContent()
+        monitor.onError = { [weak self, weak monitor] error in
+            Log.gesture.error("Trackpad data stream stopped: \(error)")
+            Task { @MainActor [weak self, weak monitor] in
+                // A released monitor was already replaced; its late error is irrelevant.
+                guard let self, let monitor else { return }
+                self.gestureMonitorController?.reportRuntimeError(error, from: monitor)
+                self.settingsWindowController?.refreshLocalizedContent()
             }
         }
     }
 
+    /// Hot key, status item, and menu activations present on the pointer's display, like the
+    /// trackpad pinch.
     private func showLunchpad() {
-        showLunchpad(targetScreen: nil)
+        showLunchpad(targetScreen: screenForPointer())
     }
 
     private func showLunchpad(targetScreen: NSScreen?) {
@@ -381,19 +464,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.show(on: targetScreen)
     }
 
-    /// Resolves the screen that should host the launcher when a trackpad pinch activates it.
+    /// Resolves the screen that should host the launcher for any activation path.
     ///
     /// Samples `NSEvent.mouseLocation` on the main actor (the multitouch callback is off-thread)
     /// and selects the connected display whose frame contains that point. Falls back to
     /// `NSScreen.main`, then to `nil` (which lets `LunchpadWindow.show` keep its previous
     /// main-screen behavior) when no screen contains the pointer.
-    private func screenForPinchActivation() -> NSScreen? {
+    private func screenForPointer() -> NSScreen? {
         let pointerLocation = NSEvent.mouseLocation
         return ScreenSelectionPolicy.selectedScreen(
             pointerLocation: pointerLocation,
             screens: NSScreen.screens,
             mainScreen: NSScreen.main
         )
+    }
+
+    /// Lunchpad closes before Launch Services answers, so a failed launch would otherwise go
+    /// unnoticed.
+    private func presentLaunchFailure(for app: AppItem, error: Error) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = localizer.formatted("launch.failed.title", app.name)
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: localizer.string("alert.ok"))
+        NSApp.activate()
+        alert.runModal()
     }
 
     private func dismissLunchpad() {
@@ -420,7 +515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 from: canonicalItems.flatMap(\.apps)
             )
         } catch {
-            print("⚠️ Drag arrangement was not saved: \(error)")
+            Log.layout.error("Drag arrangement was not saved: \(error)")
             refreshPresentedCatalog(animated: false)
             return
         }
@@ -430,6 +525,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             refreshPresentedCatalog(animated: false)
         }
+    }
+
+    /// Persists a folder edit and presents the stored layout. A failed edit leaves the stored
+    /// layout unchanged, and the presented catalog is restored from it.
+    private func applyLayoutEdit(
+        _ description: String,
+        _ edit: (LunchpadLayoutStore) throws -> Void
+    ) {
+        guard let layoutStore else {
+            refreshPresentedCatalog(animated: false)
+            return
+        }
+        do {
+            try edit(layoutStore)
+            canonicalItems = AppScanner.applyingRuntimeMetadata(
+                to: try layoutStore.loadVisibleItems(),
+                from: canonicalItems.flatMap(\.apps)
+            )
+        } catch {
+            Log.layout.error("\(description) was not saved: \(error)")
+        }
+        refreshPresentedCatalog(animated: false)
     }
 
     private func applyCatalogRefresh(
@@ -447,7 +564,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     on: layoutStore
                 )
             } catch {
-                print("⚠️ Failed to apply application catalog refresh: \(error)")
+                Log.catalog.error("Failed to apply application catalog refresh: \(error)")
                 return
             }
         } else {
@@ -457,7 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         canonicalItems = latestItems
         let appCount = latestItems.reduce(0) { $0 + $1.apps.count }
         let reason = catalogChanged ? "catalog change" : "app content change"
-        print("Application catalog synchronized (\(reason)): \(appCount) apps")
+        Log.catalog.notice("Application catalog synchronized (\(reason)): \(appCount) apps")
         window?.update(
             items: presentedItems(from: latestItems),
             catalogChanged: catalogChanged,
@@ -519,7 +636,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let now = ProcessInfo.processInfo.systemUptime
 
         if contacts.count != debugLastContactCount {
-            print("[Gesture] records=\(frame.contacts.count) active=\(contacts.count)")
+            Log.gesture.debug("[Gesture] records=\(frame.contacts.count) active=\(contacts.count)")
             debugLastContactCount = contacts.count
         }
 
@@ -543,7 +660,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         debugMaximumDistance = max(debugMaximumDistance ?? distance, distance)
 
         if now - debugLastPrintAt >= 0.1, let debugMaximumDistance {
-            print(
+            Log.gesture.debug(
                 "[Gesture] \(fingerCount)-finger spread=\(String(format: "%.3f", distance)) "
                     + "ratio=\(String(format: "%.3f", distance / debugMaximumDistance))"
             )

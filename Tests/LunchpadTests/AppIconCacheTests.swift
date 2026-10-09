@@ -7,14 +7,10 @@ final class AppIconCacheTests: XCTestCase {
         let url = URL(fileURLWithPath: "/Applications/Changing.app")
         let firstLoadStarted = DispatchSemaphore(value: 0)
         let allowFirstLoadToFinish = DispatchSemaphore(value: 0)
-        let lock = NSLock()
-        var loadCount = 0
+        let loadCount = LoadCounter()
 
         let cache = AppIconCache { _ in
-            lock.lock()
-            loadCount += 1
-            let currentLoad = loadCount
-            lock.unlock()
+            let currentLoad = loadCount.increment()
 
             if currentLoad == 1 {
                 firstLoadStarted.signal()
@@ -40,9 +36,61 @@ final class AppIconCacheTests: XCTestCase {
         // If the in-flight load repopulated the invalidated entry, this is a cache hit and the
         // loader remains at one call. The serialized second removal requires a fresh load.
         _ = cache.icon(for: url)
+        XCTAssertEqual(loadCount.value, 2)
+    }
+
+    func testRasterizedIconHasOneBitmapAtTheRequestedPixelSize() throws {
+        let source = NSImage(size: NSSize(width: 32, height: 32), flipped: false) { rect in
+            NSColor.systemRed.setFill()
+            rect.fill()
+            return true
+        }
+
+        let icon = AppIconCache.rasterized(source, pointSize: 88, scale: 2)
+
+        XCTAssertEqual(icon.size, NSSize(width: 88, height: 88))
+        XCTAssertEqual(icon.representations.count, 1)
+        let representation = try XCTUnwrap(icon.representations.first)
+        XCTAssertEqual(representation.pixelsWide, 176)
+        XCTAssertEqual(representation.pixelsHigh, 176)
+    }
+
+    func testWorkspaceIconRasterizesOffTheMainThread() throws {
+        let appPath = "/System/Applications/Calculator.app"
+        guard FileManager.default.fileExists(atPath: appPath) else {
+            throw XCTSkip("Calculator is not installed")
+        }
+        var rasterized: NSImage?
+        DispatchQueue.global(qos: .userInitiated).sync {
+            rasterized = AppIconCache.rasterized(
+                NSWorkspace.shared.icon(forFile: appPath),
+                scale: 2
+            )
+        }
+
+        let icon = try XCTUnwrap(rasterized)
+        var rect = NSRect(origin: .zero, size: icon.size)
+        let image = try XCTUnwrap(icon.cgImage(forProposedRect: &rect, context: nil, hints: nil))
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        let center = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2))
+        XCTAssertGreaterThan(center.alphaComponent, 0.5)
+    }
+}
+
+private final class LoadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() -> Int {
         lock.lock()
-        let finalLoadCount = loadCount
-        lock.unlock()
-        XCTAssertEqual(finalLoadCount, 2)
+        defer { lock.unlock() }
+        count += 1
+        return count
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
     }
 }

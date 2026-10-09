@@ -44,9 +44,7 @@ final class RootPageStore {
     private let clock: () -> Date
 
     init(defaults: UserDefaults? = nil, clock: @escaping () -> Date = { Date() }) {
-        self.defaults = defaults
-            ?? UserDefaults(suiteName: LunchpadPreferences.domain)
-            ?? .standard
+        self.defaults = defaults ?? LunchpadDefaults.make()
         self.clock = clock
     }
 

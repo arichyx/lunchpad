@@ -53,4 +53,22 @@ enum ScreenSelectionPolicy {
         }
         return screens.first
     }
+
+    /// Finds the display that is still hosting a visible launcher after a display
+    /// reconfiguration. Returns `nil` when that display is no longer connected, so the caller
+    /// dismisses instead of leaving launcher windows on a stale frame.
+    static func presentedScreenIndex(
+        displayID: CGDirectDisplayID?,
+        displayIDs: [CGDirectDisplayID?]
+    ) -> Int? {
+        guard let displayID else { return nil }
+        return displayIDs.firstIndex(of: displayID)
+    }
+}
+
+extension NSScreen {
+    /// The Core Graphics display backing this screen, stable across frame and resolution changes.
+    var displayID: CGDirectDisplayID? {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
 }

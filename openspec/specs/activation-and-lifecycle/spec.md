@@ -13,6 +13,7 @@ Lunchpad SHALL start as an accessory application without automatically opening i
 
 - **WHEN** Lunchpad finishes application initialization
 - **THEN** it installs catalog monitoring, activation controls, and its menu bar item while leaving the launcher hidden
+- **AND** it does not activate itself, so the frontmost application keeps keyboard focus, for example when Lunchpad starts as a login item
 
 #### Scenario: Launcher window closes
 
@@ -94,6 +95,11 @@ through the public Service Management API, with the macOS registration state as 
 - **WHEN** the user disables Launch at Login and macOS accepts the request
 - **THEN** macOS removes Lunchpad's main-app login registration
 
+#### Scenario: macOS requires approval
+
+- **WHEN** macOS reports that the registered login item requires the user's approval
+- **THEN** Settings keeps the switch on, explains that approval is needed in System Settings › General › Login Items, offers a button that opens that pane, and refreshes the state when Settings becomes key again
+
 #### Scenario: Lunchpad is not running from an app bundle
 
 - **WHEN** Settings is opened from a SwiftPM development executable that cannot be registered as a main-app login item
@@ -111,7 +117,7 @@ Lunchpad SHALL hide immediately after an application click and SHALL submit the 
 #### Scenario: Launch Services reports failure
 
 - **WHEN** the asynchronous application launch request fails
-- **THEN** Lunchpad reports the error without reopening or terminating the resident process
+- **THEN** Lunchpad shows a localized alert naming the application and the error, without reopening the launcher or terminating the resident process
 
 ### Requirement: External application activation dismissal
 

@@ -37,6 +37,75 @@ final class MultitouchKitTests: XCTestCase {
         XCTAssertTrue(contact.isActive)
     }
 
+    func testDeviceObserverDoesNotReportExistingDevices() throws {
+        let queue = DispatchQueue(label: "MultitouchKitTests.device-observer")
+        var observer: MultitouchDeviceObserver? = try MultitouchDeviceObserver(queue: queue) {
+            XCTFail("Devices present at registration must not be reported")
+        }
+        queue.sync {}
+        Thread.sleep(forTimeInterval: 0.1)
+        queue.sync {}
+        XCTAssertNotNil(observer)
+        observer = nil
+    }
+
+    func testBuiltInDeviceIsPreferredOverRegistryOrder() {
+        XCTAssertEqual(MultitouchMonitor.preferredDeviceIndex(builtInFlags: [false, nil, true]), 2)
+        XCTAssertEqual(MultitouchMonitor.preferredDeviceIndex(builtInFlags: [nil, false]), 0)
+        XCTAssertEqual(MultitouchMonitor.preferredDeviceIndex(builtInFlags: [true, true]), 0)
+        XCTAssertNil(MultitouchMonitor.preferredDeviceIndex(builtInFlags: []))
+    }
+
+    func testParserRejectsUnusableSensorDimensions() {
+        let packet = [UInt8](repeating: 0, count: 38).enumerated().map { index, _ -> UInt8 in
+            switch index {
+            case 0: 0x75
+            case 2: 32
+            default: 0
+            }
+        }
+        XCTAssertNotNil(MultitouchPacketParser(sensorWidth: 15_600, sensorHeight: 9_600).parse(packet))
+        XCTAssertNil(MultitouchPacketParser(sensorWidth: 0, sensorHeight: 9_600).parse(packet))
+        XCTAssertNil(MultitouchPacketParser(sensorWidth: 15_600, sensorHeight: -1).parse(packet))
+        XCTAssertNil(MultitouchPacketParser(sensorWidth: .infinity, sensorHeight: 9_600).parse(packet))
+    }
+
+    func testParserReadsOnlyTheDequeuedPrefixOfAReusedBuffer() throws {
+        let parser = MultitouchPacketParser(sensorWidth: 15_600, sensorHeight: 9_600)
+        var buffer = [UInt8](repeating: 0xff, count: 128)
+        buffer.replaceSubrange(0..<32, with: [UInt8](repeating: 0, count: 32))
+        buffer[0] = 0x75
+        buffer[2] = 32
+
+        let frame = try XCTUnwrap(buffer.withUnsafeBytes {
+            parser.parse(UnsafeRawBufferPointer(rebasing: $0[0..<32]))
+        })
+        XCTAssertTrue(frame.contacts.isEmpty)
+    }
+
+    func testRegistryValuesAreValidatedBeforeUse() {
+        XCTAssertEqual(MultitouchMonitor.validatedSensorDimension(12_000, fallback: 15_600), 12_000)
+        XCTAssertEqual(MultitouchMonitor.validatedSensorDimension(nil, fallback: 15_600), 15_600)
+        XCTAssertEqual(MultitouchMonitor.validatedSensorDimension(0, fallback: 15_600), 15_600)
+        XCTAssertEqual(MultitouchMonitor.validatedSensorDimension(.nan, fallback: 9_600), 9_600)
+
+        XCTAssertEqual(MultitouchMonitor.validatedPacketSize(8_192), 8_192)
+        XCTAssertEqual(MultitouchMonitor.validatedPacketSize(nil), 4_096)
+        XCTAssertEqual(MultitouchMonitor.validatedPacketSize(0), 4_096)
+        XCTAssertEqual(MultitouchMonitor.validatedPacketSize(1e12), 4_096)
+    }
+
+    func testRecognizersExposeTheirConfiguration() {
+        let pinch = PinchRecognizer(fingerCount: 3, contractionThreshold: 0.8)
+        XCTAssertEqual(pinch.fingerCount, 3)
+        XCTAssertEqual(pinch.maximumContactCount, 3)
+        XCTAssertEqual(pinch.contractionThreshold, 0.8)
+
+        let expand = ExpandRecognizer(fingerCount: 4)
+        XCTAssertEqual(expand.maximumContactCount, 5)
+        XCTAssertEqual(expand.expansionThreshold, 1.22)
+    }
+
     func testFourFingerContractionTriggersOnceAndRearmsAfterRelease() {
         var recognizer = PinchRecognizer(fingerCount: 4)
         let spread = frame(scale: 1.0)
@@ -204,11 +273,20 @@ final class MultitouchKitTests: XCTestCase {
         var gate = PinchCompletionGate()
         let activeFrame = frame(scale: 1.0)
         let firstContactFrame = MultitouchFrame(contacts: Array(activeFrame.contacts.prefix(1)))
+        let secondContactFrame = MultitouchFrame(contacts: Array(activeFrame.contacts.prefix(2)))
         let releasedFrame = MultitouchFrame(contacts: [])
 
         XCTAssertNil(
             gate.process(
                 firstContactFrame,
+                pinchDetected: false,
+                expandDetected: false,
+                evaluateActivation: { XCTFail("A single contact must not sample state"); return true }
+            )
+        )
+        XCTAssertNil(
+            gate.process(
+                secondContactFrame,
                 pinchDetected: false,
                 expandDetected: false,
                 evaluateActivation: { false }
@@ -219,7 +297,7 @@ final class MultitouchKitTests: XCTestCase {
                 activeFrame,
                 pinchDetected: true,
                 expandDetected: false,
-                evaluateActivation: { XCTFail("Gesture state was sampled after first contact"); return true }
+                evaluateActivation: { XCTFail("Gesture state was sampled twice"); return true }
             )
         )
         XCTAssertEqual(
@@ -249,6 +327,30 @@ final class MultitouchKitTests: XCTestCase {
             ),
             .activate
         )
+    }
+
+    func testSingleContactSequencesNeverSampleActivationPolicy() {
+        var gate = PinchCompletionGate()
+        let oneContact = MultitouchFrame(contacts: Array(frame(scale: 1.0).contacts.prefix(1)))
+
+        for _ in 0..<3 {
+            XCTAssertNil(
+                gate.process(
+                    oneContact,
+                    pinchDetected: false,
+                    expandDetected: false,
+                    evaluateActivation: { XCTFail("Pointer movement must not sample state"); return true }
+                )
+            )
+            XCTAssertNil(
+                gate.process(
+                    MultitouchFrame(contacts: []),
+                    pinchDetected: false,
+                    expandDetected: false,
+                    evaluateActivation: { XCTFail("Release must not sample state"); return true }
+                )
+            )
+        }
     }
 
     func testExpandCompletionWaitsUntilFingersAreLifted() {

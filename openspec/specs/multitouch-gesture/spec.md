@@ -106,8 +106,16 @@ Lunchpad SHALL defer launcher presentation until a recognized pinch has complete
 ### Requirement: Show Desktop restoration
 
 Lunchpad SHALL preserve the system's Show Desktop restoration gesture by sampling the actual
-WindowServer state at the beginning of each four-finger contact sequence. The decision SHALL apply
-only to that contact sequence and SHALL NOT be inferred from a previous outward gesture.
+WindowServer state once per four-finger-mode contact sequence, when the sequence's second contact
+lands and before any multi-finger motion begins. A contact sequence that never reaches two contacts
+SHALL NOT query WindowServer. The decision SHALL apply only to that contact sequence and SHALL NOT be
+inferred from a previous outward gesture.
+
+#### Scenario: Ordinary pointer use does not sample desktop state
+
+- **GIVEN** four-finger mode is selected
+- **WHEN** a contact sequence contains only one contact, such as pointer movement, a tap, or a click
+- **THEN** Lunchpad does not query WindowServer for that sequence
 
 #### Scenario: Show Desktop is active
 
@@ -147,6 +155,37 @@ Lunchpad SHALL fail safely when a trackpad or macOS release does not provide the
 
 - **WHEN** contact packets do not match the supported `0x75` layout
 - **THEN** gesture activation remains unavailable while all non-gesture launcher features continue operating
+
+#### Scenario: Several multitouch devices are attached
+
+- **GIVEN** a Magic Mouse or external trackpad publishes another `AppleMultitouchDevice` alongside the built-in trackpad
+- **WHEN** the gesture monitor starts
+- **THEN** Lunchpad monitors the device whose registry entry reports `MT Built-In`, independent of registry order
+
+#### Scenario: Registry values are unusable
+
+- **WHEN** the device reports a missing, zero, negative, or non-finite sensor dimension, or an implausible maximum packet size
+- **THEN** Lunchpad uses the verified built-in trackpad values instead of dividing by an unusable size
+
+### Requirement: Gesture monitor recovery
+
+Lunchpad SHALL rebuild an enabled gesture monitor after the system wakes and whenever an
+`AppleMultitouchDevice` appears or disappears, coalescing bursts of such notifications into one
+restart. A disabled gesture SHALL stay stopped. A stream failure reported by a monitor that has
+already been replaced SHALL NOT stop its successor, and a failed dequeue SHALL stop the stream
+rather than retrying the same queued report.
+
+#### Scenario: A trackpad reconnects
+
+- **GIVEN** Trackpad Gesture is enabled and the monitored stream stopped because its device went away
+- **WHEN** a multitouch device appears
+- **THEN** Lunchpad starts a fresh monitor for the selected finger count and clears the stream error once it succeeds
+
+#### Scenario: The Mac wakes from sleep
+
+- **GIVEN** Trackpad Gesture is enabled
+- **WHEN** macOS reports that the system woke
+- **THEN** Lunchpad replaces the gesture monitor with a fresh connection to the driver
 
 ### Requirement: Configurable outward-spread recognition
 

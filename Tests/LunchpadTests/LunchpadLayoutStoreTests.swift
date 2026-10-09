@@ -1,3 +1,4 @@
+import SQLite3
 import XCTest
 @testable import Lunchpad
 
@@ -358,6 +359,51 @@ final class LunchpadLayoutStoreTests: XCTestCase {
 
     // MARK: Reconciliation interplay
 
+    func testUnchangedReconciliationDoesNotWrite() throws {
+        _ = try reconcile("Alpha", "Bravo", "Charlie")
+        let changesAfterFirstScan = store.totalChangeCount
+
+        let items = try reconcile("Alpha", "Bravo", "Charlie")
+
+        XCTAssertEqual(store.totalChangeCount, changesAfterFirstScan)
+        XCTAssertEqual(rootSlotNames(items), ["Alpha", "Bravo", "Charlie"])
+    }
+
+    func testReconciliationWritesOnlyChangedAndMissingApplications() throws {
+        _ = try reconcile("Alpha", "Bravo", "Charlie")
+        let baseline = store.totalChangeCount
+
+        var renamed = app("Bravo")
+        renamed = AppItem(
+            identifier: renamed.identifier,
+            bundleIdentifier: renamed.bundleIdentifier,
+            name: "Bravo Pro",
+            url: renamed.url,
+            creationDate: nil,
+            modificationDate: nil
+        )
+        let items = try store.reconcile([
+            DiscoveredApplication(item: app("Alpha"), shouldDefaultToOther: false),
+            DiscoveredApplication(item: renamed, shouldDefaultToOther: false),
+        ])
+
+        // One metadata update for Bravo and one absence update for Charlie.
+        XCTAssertEqual(store.totalChangeCount - baseline, 2)
+        XCTAssertEqual(rootSlotNames(items), ["Alpha", "Bravo Pro"])
+
+        let restored = try reconcile("Alpha", "Bravo", "Charlie")
+        XCTAssertEqual(rootSlotNames(restored), ["Alpha", "Bravo", "Charlie"])
+    }
+
+    func testDuplicateDiscoveredIdentifierIsReconciledOnce() throws {
+        let items = try store.reconcile([
+            DiscoveredApplication(item: app("Alpha"), shouldDefaultToOther: false),
+            DiscoveredApplication(item: app("Alpha"), shouldDefaultToOther: false),
+        ])
+
+        XCTAssertEqual(rootSlotNames(items), ["Alpha"])
+    }
+
     func testReconciliationPreservesDraggedPositionsAndAssignments() throws {
         _ = try reconcile("Alpha", "Bravo", "Charlie", "Zulu")
         try store.commit(.rootRearranged(slots: [
@@ -469,5 +515,125 @@ final class LunchpadLayoutStoreTests: XCTestCase {
             databaseURL: directory.appendingPathComponent("layout.sqlite3")
         )
         XCTAssertEqual(rootSlotNames(try reopened.loadVisibleItems()), ["Bravo", "Alpha", "Charlie"])
+    }
+
+    // MARK: Folder editing
+
+    private func makeFolderBetweenBravoAndDelta() throws -> String {
+        _ = try reconcile("Alpha", "Bravo", "Charlie", "Delta")
+        try store.commit(.folderCreated(
+            name: "Games",
+            appIdentifiers: ["app.charlie", "app.alpha"],
+            insertionIndex: 1,
+            remainingRootSlots: [
+                .app(identifier: "app.bravo"),
+                .app(identifier: "app.delta"),
+            ]
+        ))
+        return try XCTUnwrap(folder(named: "Games", in: try store.loadVisibleItems())).identifier
+    }
+
+    private func folder(named name: String, in items: [LunchpadItem]) -> AppFolder? {
+        items.compactMap { item -> AppFolder? in
+            guard case .folder(let folder) = item, folder.name == name else { return nil }
+            return folder
+        }.first
+    }
+
+    func testDeletingFolderPutsItsApplicationsInItsPlace() throws {
+        let folderIdentifier = try makeFolderBetweenBravoAndDelta()
+
+        try store.deleteFolder(identifier: folderIdentifier)
+
+        XCTAssertEqual(
+            rootSlotNames(try store.loadVisibleItems()),
+            ["Bravo", "Charlie", "Alpha", "Delta"]
+        )
+    }
+
+    func testDeletedFolderAssignmentsSurviveReconciliation() throws {
+        let folderIdentifier = try makeFolderBetweenBravoAndDelta()
+        try store.deleteFolder(identifier: folderIdentifier)
+
+        let items = try reconcile("Alpha", "Bravo", "Charlie", "Delta")
+
+        XCTAssertEqual(rootSlotNames(items), ["Bravo", "Charlie", "Alpha", "Delta"])
+    }
+
+    func testRenamingFolderTrimsAndPersistsTheName() throws {
+        let folderIdentifier = try makeFolderBetweenBravoAndDelta()
+
+        try store.renameFolder(identifier: folderIdentifier, name: "  Arcade  ")
+
+        XCTAssertEqual(
+            rootSlotNames(try store.loadVisibleItems()),
+            ["Bravo", "Arcade", "Delta"]
+        )
+    }
+
+    func testSystemFolderCannotBeRenamedOrDeleted() throws {
+        XCTAssertThrowsError(
+            try store.renameFolder(
+                identifier: LunchpadLayoutStore.otherFolderIdentifier,
+                name: "Mine"
+            )
+        )
+        XCTAssertThrowsError(
+            try store.deleteFolder(identifier: LunchpadLayoutStore.otherFolderIdentifier)
+        )
+    }
+
+    // MARK: Schema versioning
+
+    func testNewDatabaseRecordsCurrentSchemaVersion() throws {
+        XCTAssertEqual(
+            try userVersion(of: directory.appendingPathComponent("layout.sqlite3")),
+            LunchpadLayoutStore.currentSchemaVersion
+        )
+    }
+
+    func testExistingDatabaseReopensWithoutLosingLayout() throws {
+        _ = try reconcile("Alpha", "Bravo")
+        store = nil
+
+        store = try LunchpadLayoutStore(
+            databaseURL: directory.appendingPathComponent("layout.sqlite3")
+        )
+
+        XCTAssertEqual(rootSlotNames(try store.loadVisibleItems()), ["Alpha", "Bravo"])
+    }
+
+    func testDatabaseFromNewerBuildIsRefusedUnchanged() throws {
+        let databaseURL = directory.appendingPathComponent("layout.sqlite3")
+        store = nil
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(database, "PRAGMA user_version = 99", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(database)
+
+        XCTAssertThrowsError(try LunchpadLayoutStore(databaseURL: databaseURL)) { error in
+            guard case .unsupportedSchemaVersion(99) = error as? LunchpadLayoutStoreError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+        XCTAssertEqual(try userVersion(of: databaseURL), 99)
+    }
+
+    private func userVersion(of databaseURL: URL) throws -> Int64 {
+        var database: OpaquePointer?
+        guard sqlite3_open(databaseURL.path, &database) == SQLITE_OK else {
+            throw LunchpadLayoutStoreError.sqlite("open failed")
+        }
+        defer { sqlite3_close(database) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &statement, nil) == SQLITE_OK
+        else {
+            throw LunchpadLayoutStoreError.sqlite("prepare failed")
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw LunchpadLayoutStoreError.sqlite("step failed")
+        }
+        return sqlite3_column_int64(statement, 0)
     }
 }

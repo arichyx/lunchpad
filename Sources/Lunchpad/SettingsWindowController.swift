@@ -1,7 +1,7 @@
 import AppKit
 
 @MainActor
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private enum Feedback {
         case key(String)
         case formatted(String, String)
@@ -26,6 +26,7 @@ final class SettingsWindowController: NSWindowController {
     private let shortcutRecorder: ShortcutRecorderView
     private let clearShortcutButton = NSButton()
     private let loginItemSwitch = NSSwitch()
+    private let loginItemApprovalButton = NSButton()
     private let gestureSwitch = NSSwitch()
     private let gestureFingerCountPopup = NSPopUpButton()
     private let feedbackLabel = NSTextField(wrappingLabelWithString: "")
@@ -55,6 +56,7 @@ final class SettingsWindowController: NSWindowController {
         window.collectionBehavior.insert(.moveToActiveSpace)
         window.center()
         super.init(window: window)
+        window.delegate = self
         setupContent()
         refreshLocalizedContent()
     }
@@ -78,14 +80,32 @@ final class SettingsWindowController: NSWindowController {
         gestureLabel.stringValue = localizer.string("settings.trackpad-gesture")
         gestureFingerCountLabel.stringValue = localizer.string("settings.gesture-finger-count")
         clearShortcutButton.title = localizer.string("settings.shortcut.clear")
+        loginItemApprovalButton.title = localizer.string("settings.launch-at-login.open-settings")
 
         rebuildLanguagePopup()
         rebuildOrderPopup()
         rebuildGestureFingerCountPopup()
         refreshShortcutState()
+        refreshLoginItemState()
+        gestureSwitch.state = preferences.gestureEnabled ? .on : .off
+        refreshFeedback()
+    }
+
+    /// Whether the login item waits for approval in System Settings (diagnostics and tests).
+    var isShowingLoginItemApproval: Bool { !loginItemApprovalButton.isHidden }
+
+    /// The current explanatory text below the settings (diagnostics and tests).
+    var feedbackText: String? { feedbackLabel.isHidden ? nil : feedbackLabel.stringValue }
+
+    private func refreshLoginItemState() {
         loginItemSwitch.isEnabled = loginItemController.isAvailable
         loginItemSwitch.state = loginItemController.isEnabled ? .on : .off
-        gestureSwitch.state = preferences.gestureEnabled ? .on : .off
+        loginItemApprovalButton.isHidden = !loginItemController.requiresApproval
+    }
+
+    /// The user may approve the login item in System Settings and come back.
+    func windowDidBecomeKey(_ notification: Notification) {
+        refreshLoginItemState()
         refreshFeedback()
     }
 
@@ -133,6 +153,10 @@ final class SettingsWindowController: NSWindowController {
 
         loginItemSwitch.target = self
         loginItemSwitch.action = #selector(loginItemChanged(_:))
+        loginItemApprovalButton.bezelStyle = .rounded
+        loginItemApprovalButton.target = self
+        loginItemApprovalButton.action = #selector(openLoginItemSettings(_:))
+        loginItemApprovalButton.isHidden = true
         gestureSwitch.target = self
         gestureSwitch.action = #selector(gestureChanged(_:))
 
@@ -145,13 +169,18 @@ final class SettingsWindowController: NSWindowController {
         shortcutControls.alignment = .centerY
         shortcutControls.spacing = 8
 
+        let loginItemControls = NSStackView(views: [loginItemSwitch, loginItemApprovalButton])
+        loginItemControls.orientation = .horizontal
+        loginItemControls.alignment = .centerY
+        loginItemControls.spacing = 12
+
         let stack = NSStackView(views: [
             appearanceTitle,
             makeRow(label: languageLabel, control: languagePopup),
             makeRow(label: orderLabel, control: orderPopup),
             activationTitle,
             makeRow(label: shortcutLabel, control: shortcutControls),
-            makeRow(label: loginItemLabel, control: loginItemSwitch),
+            makeRow(label: loginItemLabel, control: loginItemControls),
             makeRow(label: gestureLabel, control: gestureSwitch),
             makeRow(label: gestureFingerCountLabel, control: gestureFingerCountPopup),
             feedbackLabel,
@@ -273,6 +302,8 @@ final class SettingsWindowController: NSWindowController {
             feedback = transientFeedback
         } else if hotKeyController.lastError != nil {
             feedback = .key("settings.shortcut.unavailable")
+        } else if loginItemController.requiresApproval {
+            feedback = .key("settings.launch-at-login.approval")
         } else if let gestureError = gestureErrorProvider() {
             feedback = .formatted("settings.trackpad-gesture.unavailable", gestureError)
         } else if !loginItemController.isAvailable {
@@ -313,6 +344,7 @@ final class SettingsWindowController: NSWindowController {
         switch loginItemController.setEnabled(requested) {
         case .success(let actual):
             sender.state = actual ? .on : .off
+            loginItemApprovalButton.isHidden = !loginItemController.requiresApproval
             transientFeedback = nil
         case .failure(let error):
             sender.state = loginItemController.isEnabled ? .on : .off
@@ -322,6 +354,10 @@ final class SettingsWindowController: NSWindowController {
             )
         }
         refreshFeedback()
+    }
+
+    @objc private func openLoginItemSettings(_ sender: Any?) {
+        loginItemController.openSystemSettings()
     }
 
     @objc private func gestureChanged(_ sender: NSSwitch) {

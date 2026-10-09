@@ -140,6 +140,16 @@ final class ShowDesktopStateDetectorTests: XCTestCase {
         XCTAssertEqual(snapshots.map(\.isRegularApplication), [true, true, false])
     }
 
+    func testWindowEntryWithMalformedBoundsIsSkipped() {
+        var malformed = windowEntry(processIdentifier: 100, bounds: display)
+        malformed[kCGWindowBounds] = "not a dictionary"
+        let entries = [malformed, windowEntry(processIdentifier: 200, bounds: display)]
+
+        let snapshots = ShowDesktopStateDetector.windowSnapshots(from: entries) { _ in true }
+
+        XCTAssertEqual(snapshots.map(\.ownerProcessIdentifier), [200])
+    }
+
     private func window(
         processIdentifier: pid_t = 100,
         bounds: CGRect,

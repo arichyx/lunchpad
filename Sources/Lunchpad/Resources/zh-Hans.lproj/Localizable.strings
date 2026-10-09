@@ -38,3 +38,9 @@
 "status.accessibility" = "Lunchpad";
 "settings.application-order.manual" = "手动";
 "folder.new" = "新建文件夹";
+"launch.failed.title" = "无法打开“%@”。";
+"alert.ok" = "好";
+"folder.rename" = "重命名文件夹";
+"folder.delete" = "删除文件夹";
+"settings.launch-at-login.approval" = "“登录时启动”需要在“系统设置 › 通用 › 登录项”中批准。";
+"settings.launch-at-login.open-settings" = "打开登录项…";

@@ -42,19 +42,92 @@ public struct ApplicationDirectoryEvent: Sendable {
 
 public struct ApplicationDirectoryChangeBatch: Sendable {
     public let events: [ApplicationDirectoryEvent]
+    /// A watched root that is observed through an ancestor directory appeared or disappeared.
+    /// The stream must be rebuilt so it watches the nearest existing directory again.
+    public let rootAvailabilityChanged: Bool
+
+    public init(events: [ApplicationDirectoryEvent], rootAvailabilityChanged: Bool = false) {
+        self.events = events
+        self.rootAvailabilityChanged = rootAvailabilityChanged
+    }
 
     public var requiresFullRescan: Bool {
-        events.contains(where: \ApplicationDirectoryEvent.requiresFullRescan)
+        rootAvailabilityChanged
+            || events.contains(where: \ApplicationDirectoryEvent.requiresFullRescan)
     }
 
     public var containsRealChanges: Bool {
-        events.contains { !$0.isHistoryDone }
+        rootAvailabilityChanged || events.contains { !$0.isHistoryDone }
     }
 
     public var requiresStreamRestart: Bool {
-        events.contains {
+        rootAvailabilityChanged || events.contains {
             $0.flags & FSEventStreamEventFlags(kFSEventStreamEventFlagRootChanged) != 0
         }
+    }
+}
+
+/// Decides which FSEvents paths concern the watched application roots.
+///
+/// A missing root is watched through its nearest existing ancestor, which also reports unrelated
+/// writes such as shell history files in the home directory. An event on such an ancestor matters
+/// only when a watched root appeared or disappeared, or when FSEvents requests a recovery scan.
+struct ApplicationDirectoryEventFilter {
+    enum Relevance: Equatable {
+        case irrelevant
+        case relevant
+        case rootAvailabilityChanged
+    }
+
+    let watchedPaths: [String]
+    private let directoryExists: (String) -> Bool
+    private var knownAvailability: [String: Bool] = [:]
+
+    init(watchedPaths: [String], directoryExists: @escaping (String) -> Bool) {
+        self.watchedPaths = watchedPaths
+        self.directoryExists = directoryExists
+        refreshAvailability()
+    }
+
+    /// Records whether each watched root currently exists. Called whenever the stream is rebuilt.
+    mutating func refreshAvailability() {
+        for path in watchedPaths {
+            knownAvailability[path] = directoryExists(path)
+        }
+    }
+
+    mutating func relevance(
+        ofEventPath eventPath: String,
+        flags: FSEventStreamEventFlags
+    ) -> Relevance {
+        let normalizedEventPath = eventPath.hasSuffix("/") && eventPath.count > 1
+            ? String(eventPath.dropLast())
+            : eventPath
+        let ancestorPrefix = normalizedEventPath == "/" ? "/" : normalizedEventPath + "/"
+        let requiresRecovery = ApplicationDirectoryEvent(
+            path: eventPath,
+            eventID: 0,
+            flags: flags
+        ).requiresFullRescan
+
+        var result = Relevance.irrelevant
+        for watchedPath in watchedPaths {
+            if normalizedEventPath == watchedPath
+                || normalizedEventPath.hasPrefix(watchedPath + "/") {
+                if result == .irrelevant { result = .relevant }
+                continue
+            }
+            guard watchedPath.hasPrefix(ancestorPrefix) else { continue }
+
+            let exists = directoryExists(watchedPath)
+            if knownAvailability[watchedPath] != exists {
+                knownAvailability[watchedPath] = exists
+                result = .rootAvailabilityChanged
+            } else if requiresRecovery, result == .irrelevant {
+                result = .relevant
+            }
+        }
+        return result
     }
 }
 
@@ -88,12 +161,22 @@ public final class ApplicationDirectoryMonitor: @unchecked Sendable {
     )
     private let lock = NSLock()
     private var stream: FSEventStreamRef?
+    /// Guards `eventFilter`. Never held while calling FSEvents, so a callback cannot deadlock
+    /// against `stop()`.
+    private let filterLock = NSLock()
+    private var eventFilter: ApplicationDirectoryEventFilter
 
     public init(paths: [URL], latency: TimeInterval = 0.5) {
-        self.paths = Array(Set(paths.map {
+        let paths = Array(Set(paths.map {
             $0.resolvingSymlinksInPath().standardizedFileURL.path
         })).sorted()
+        self.paths = paths
         self.latency = latency
+        eventFilter = ApplicationDirectoryEventFilter(watchedPaths: paths) { path in
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+        }
     }
 
     deinit {
@@ -111,6 +194,9 @@ public final class ApplicationDirectoryMonitor: @unchecked Sendable {
         guard !existingPaths.isEmpty else {
             throw ApplicationDirectoryMonitorError.noExistingRoots
         }
+        filterLock.lock()
+        eventFilter.refreshAvailability()
+        filterLock.unlock()
 
         var context = FSEventStreamContext(
             version: 0,
@@ -173,18 +259,31 @@ public final class ApplicationDirectoryMonitor: @unchecked Sendable {
             to: UnsafePointer<CChar>?.self,
             capacity: eventCount
         )
+        var rootAvailabilityChanged = false
+        filterLock.lock()
         let events = (0..<eventCount).compactMap { index -> ApplicationDirectoryEvent? in
             guard let pathPointer = pathPointers[index] else { return nil }
             let path = String(cString: pathPointer)
-            guard isRelevant(path) else { return nil }
+            switch eventFilter.relevance(ofEventPath: path, flags: flags[index]) {
+            case .irrelevant:
+                return nil
+            case .rootAvailabilityChanged:
+                rootAvailabilityChanged = true
+            case .relevant:
+                break
+            }
             return ApplicationDirectoryEvent(
                 path: path,
                 eventID: ids[index],
                 flags: flags[index]
             )
         }
+        filterLock.unlock()
         guard !events.isEmpty else { return }
-        onEvents?(ApplicationDirectoryChangeBatch(events: events))
+        onEvents?(ApplicationDirectoryChangeBatch(
+            events: events,
+            rootAvailabilityChanged: rootAvailabilityChanged
+        ))
     }
 
     private func nearestExistingDirectory(for path: String) -> String? {
@@ -203,14 +302,4 @@ public final class ApplicationDirectoryMonitor: @unchecked Sendable {
         return url.path
     }
 
-    private func isRelevant(_ eventPath: String) -> Bool {
-        let normalizedEventPath = eventPath.hasSuffix("/") && eventPath.count > 1
-            ? String(eventPath.dropLast())
-            : eventPath
-        return paths.contains { watchedPath in
-            normalizedEventPath == watchedPath
-                || normalizedEventPath.hasPrefix(watchedPath + "/")
-                || watchedPath.hasPrefix(normalizedEventPath + "/")
-        }
-    }
 }

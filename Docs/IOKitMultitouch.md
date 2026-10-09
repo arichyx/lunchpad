@@ -24,7 +24,9 @@ The probe therefore uses `IOServiceMatching("AppleMultitouchDevice")`.
 This sequence was derived from the `MultitouchSupport` implementation in the Tahoe dyld
 shared cache and verified step by step with an independent probe:
 
-1. Obtain `AppleMultitouchDevice` with `IOServiceGetMatchingService`.
+1. Enumerate `AppleMultitouchDevice` services with `IOServiceGetMatchingServices` and prefer the
+   one whose `MT Built-In` property is true. A Magic Mouse or external trackpad publishes the same
+   class, so registry order must not choose the device.
 2. Open its user client with `IOServiceOpen(service, mach_task_self_, 0, &connection)`.
 3. Create a notification port with `IODataQueueAllocateNotificationPort()`.
 4. Register the port with `IOConnectSetNotificationPort(connection, 0, port, 0)`.
@@ -34,6 +36,16 @@ shared cache and verified step by step with an independent probe:
    `IODataQueueDequeue`.
 8. On shutdown, pass `[0]` to the same selector to stop the stream, unmap the memory, and
    close the connection.
+
+`Sensor Surface Width`, `Sensor Surface Height`, and `Max Packet Size` are driver-supplied and are
+validated before use; unusable values fall back to the verified values listed below. A failed
+`IODataQueueDequeue` leaves its report queued, so the read loop stops and reports the error instead
+of waiting again, which would return immediately and spin.
+
+The app rebuilds the monitor after the system wakes and whenever an `AppleMultitouchDevice` arrives
+or terminates (`IOServiceAddMatchingNotification` with first-match and terminated notifications).
+A user client whose device disappeared may never receive another report, so a fresh connection is
+the only reliable recovery.
 
 The tested hardware accepts both user-client type `0` and the four-character code `LFTR`.
 The system implementation uses type `0`, so Lunchpad does the same.
@@ -82,8 +94,10 @@ after the active contact count drops below the configured count. The outward rec
 same state machine and fires after expansion reaches 122% of the minimum. A swipe preserves
 pairwise distances closely enough that it does not satisfy either threshold.
 
-In four-finger mode, on the first contact of a new trackpad sequence, Lunchpad samples WindowServer
-geometry before the inward motion can start restoring displaced windows. If macOS is actually showing the
+In four-finger mode, when the second contact of a new trackpad sequence lands, Lunchpad samples
+WindowServer geometry once, before the inward motion can start restoring displaced windows. A single
+contact cannot become a multi-finger gesture, so pointer movement, taps, and clicks never query
+WindowServer. If macOS is actually showing the
 desktop, sizeable layer-zero windows owned by regular applications remain in the on-screen list
 but the overwhelming majority of their centres lie beyond every active display. System-owned base
 windows are ignored, and a small number of sticky or transitional windows may remain visible.

@@ -38,3 +38,9 @@
 "status.accessibility" = "Lunchpad";
 "settings.application-order.manual" = "Manual";
 "folder.new" = "New Folder";
+"launch.failed.title" = "“%@” could not be opened.";
+"alert.ok" = "OK";
+"folder.rename" = "Rename Folder";
+"folder.delete" = "Delete Folder";
+"settings.launch-at-login.approval" = "Launch at Login needs your approval in System Settings › General › Login Items.";
+"settings.launch-at-login.open-settings" = "Open Login Items…";

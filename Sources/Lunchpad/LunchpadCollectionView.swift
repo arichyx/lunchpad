@@ -23,6 +23,8 @@ final class LunchpadCollectionView: NSCollectionView {
     var onSwipeGestureWillBegin: (() -> Void)?
     var onSwipeMoved: ((CGFloat) -> Void)?
     var onSwipeEnded: ((_ translation: CGFloat, _ velocity: CGFloat) -> Void)?
+    /// Supplies a context menu for a secondary click on an item, or nil for none.
+    var onContextMenu: ((IndexPath) -> NSMenu?)?
 
     private enum DragState {
         case idle
@@ -34,7 +36,7 @@ final class LunchpadCollectionView: NSCollectionView {
 
     private var dragState = DragState.idle
     private var dragStartPoint = NSPoint.zero
-    private var accumulatedHorizontalDelta = 0.0
+    private var accumulatedWheelDelta: CGFloat = 0
     private var lastDiscreteWheelTurnAt = 0.0
     private var pressedIndexPath: IndexPath?
     private var pressedOnBackground = false
@@ -144,6 +146,14 @@ final class LunchpadCollectionView: NSCollectionView {
         }
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        // An arrangement drag or swipe owns the pointer until it ends.
+        guard dragState != .active, !swipeTracker.isActive else { return nil }
+        let point = convert(event.locationInWindow, from: nil)
+        guard let indexPath = indexPathForItem(at: point) else { return nil }
+        return onContextMenu?(indexPath)
+    }
+
     /// Whether a swipe gesture started in this view is still tracking.
     var isSwipeTracking: Bool { swipeTracker.isActive }
 
@@ -210,7 +220,12 @@ final class LunchpadCollectionView: NSCollectionView {
         guard event.momentumPhase.isEmpty else { return }
 
         if event.phase.isEmpty {
-            handleDiscreteWheel(deltaX: event.scrollingDeltaX, timestamp: event.timestamp)
+            handleDiscreteWheel(
+                deltaX: event.scrollingDeltaX,
+                deltaY: event.scrollingDeltaY,
+                hasPreciseDeltas: event.hasPreciseScrollingDeltas,
+                timestamp: event.timestamp
+            )
             return
         }
         handleTrackpadWheel(
@@ -221,17 +236,28 @@ final class LunchpadCollectionView: NSCollectionView {
         )
     }
 
-    /// Notched mouse wheels and other phase-less input page discretely, one notch at a time.
-    private func handleDiscreteWheel(deltaX: CGFloat, timestamp: TimeInterval) {
-        guard abs(deltaX) > 0 else { return }
+    /// Notched mouse wheels and other phase-less input page discretely, at most one page per
+    /// 0.45 seconds. Most mice only scroll vertically, so a vertical wheel pages as well; the
+    /// dominant axis decides. Line-based deltas count notches, so a single notch turns a page,
+    /// while precise deltas accumulate 24 points first. Internal so tests can drive it directly.
+    func handleDiscreteWheel(
+        deltaX: CGFloat,
+        deltaY: CGFloat,
+        hasPreciseDeltas: Bool,
+        timestamp: TimeInterval
+    ) {
+        let delta = abs(deltaX) >= abs(deltaY) ? deltaX : deltaY
+        guard abs(delta) > 0 else { return }
 
-        accumulatedHorizontalDelta += deltaX
+        accumulatedWheelDelta += delta
+        let threshold: CGFloat = hasPreciseDeltas ? 24 : 1
         let canTurn = timestamp - lastDiscreteWheelTurnAt > 0.45
-        if canTurn, abs(accumulatedHorizontalDelta) >= 24 {
-            // Swiping left shows the next page; swiping right shows the previous page.
-            onPageDelta?(accumulatedHorizontalDelta > 0 ? -1 : 1)
+        if canTurn, abs(accumulatedWheelDelta) >= threshold {
+            // Scrolling toward earlier content (positive deltas, in the user's scroll direction)
+            // shows the previous page; scrolling toward later content shows the next page.
+            onPageDelta?(accumulatedWheelDelta > 0 ? -1 : 1)
             lastDiscreteWheelTurnAt = timestamp
-            accumulatedHorizontalDelta = 0
+            accumulatedWheelDelta = 0
         }
     }
 

@@ -1,7 +1,10 @@
 import AppKit
 
 /// NSWorkspace icon loading touches bundles and Launch Services, so page transitions must hit memory.
-final class AppIconCache {
+///
+/// Thread-safe: `NSCache` is thread-safe, the loader is immutable, and pending-load state is only
+/// touched on `loadQueue`.
+final class AppIconCache: @unchecked Sendable {
     static let shared = AppIconCache()
 
     private let cache = NSCache<NSString, NSImage>()
@@ -10,13 +13,84 @@ final class AppIconCache {
     private let loadQueue = DispatchQueue(label: "com.arichyx.Lunchpad.icon-cache", qos: .userInitiated)
     /// Pending load state, owned exclusively by `loadQueue`.
     private let loadState = IconLoadState()
-    private let iconLoader: (URL) -> NSImage
+    private let iconLoader: @Sendable (URL) -> NSImage
 
-    init(iconLoader: @escaping (URL) -> NSImage = { url in
-        NSWorkspace.shared.icon(forFile: url.path)
-    }) {
-        self.iconLoader = iconLoader
-        cache.countLimit = 512
+    init(iconLoader: (@Sendable (URL) -> NSImage)? = nil) {
+        if let iconLoader {
+            self.iconLoader = iconLoader
+        } else {
+            let scale = Self.rasterScale()
+            self.iconLoader = { url in
+                Self.rasterized(NSWorkspace.shared.icon(forFile: url.path), scale: scale)
+            }
+        }
+        // Generous enough for every installed application plus folder previews; memory
+        // pressure still evicts entries.
+        cache.countLimit = 2_048
+    }
+
+    /// The largest point size Lunchpad draws an application icon at (the lifted drag snapshot).
+    static let rasterPointSize: CGFloat = 88
+
+    /// At least 2x so icons stay sharp when a Retina display becomes active later.
+    private static func rasterScale() -> CGFloat {
+        let screenScale: CGFloat
+        if Thread.isMainThread {
+            screenScale = MainActor.assumeIsolated {
+                NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+            }
+        } else {
+            screenScale = 2
+        }
+        return max(2, screenScale)
+    }
+
+    /// Draws `icon` once into a single bitmap representation.
+    ///
+    /// Workspace icons render their artwork lazily the first time they are drawn. Rendering here,
+    /// on the icon queue, keeps that work off the main thread during presentation and paging.
+    static func rasterized(
+        _ icon: NSImage,
+        pointSize: CGFloat = rasterPointSize,
+        scale: CGFloat
+    ) -> NSImage {
+        let pixelSide = Int((pointSize * scale).rounded(.up))
+        guard pixelSide > 0,
+              let colorSpace = CGColorSpace(name: CGColorSpace.displayP3),
+              let context = CGContext(
+                  data: nil,
+                  width: pixelSide,
+                  height: pixelSide,
+                  bitsPerComponent: 8,
+                  bytesPerRow: 0,
+                  space: colorSpace,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            return icon
+        }
+
+        let graphicsContext = NSGraphicsContext(cgContext: context, flipped: false)
+        graphicsContext.imageInterpolation = .high
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        icon.draw(
+            in: NSRect(x: 0, y: 0, width: pixelSide, height: pixelSide),
+            from: .zero,
+            operation: .copy,
+            fraction: 1
+        )
+        NSGraphicsContext.restoreGraphicsState()
+
+        guard let image = context.makeImage() else { return icon }
+        // An explicit bitmap rep keeps the rendered pixel size. `NSImage(cgImage:size:)` wraps
+        // the bitmap in a snapshot rep whose pixel size follows the display environment; on a
+        // machine without a Retina screen it reported 1x instead of the requested scale.
+        let size = NSSize(width: pointSize, height: pointSize)
+        let representation = NSBitmapImageRep(cgImage: image)
+        representation.size = size
+        let rasterized = NSImage(size: size)
+        rasterized.addRepresentation(representation)
+        return rasterized
     }
 
     /// Synchronous lookup-and-load for code that must have an image now (cell configuration
@@ -48,7 +122,7 @@ final class AppIconCache {
     /// In-place upgrades reuse paths, so path-keyed icons require explicit invalidation.
     func invalidateAll() {
         cache.removeAllObjects()
-        loadQueue.async { [cache, loadState] in
+        loadQueue.async { [self] in
             loadState.pendingURLs.removeAll()
             loadState.queuedURLs.removeAll()
             // A load already executing when the immediate invalidation ran may have inserted an
@@ -62,7 +136,7 @@ final class AppIconCache {
         for path in paths {
             cache.removeObject(forKey: path as NSString)
         }
-        loadQueue.async { [cache, loadState] in
+        loadQueue.async { [self] in
             loadState.pendingURLs.removeAll { paths.contains($0.path) }
             for path in paths {
                 loadState.queuedURLs.remove(URL(fileURLWithPath: path))
@@ -80,7 +154,7 @@ final class AppIconCache {
     }
 
     private func enqueueLoads(_ urls: [URL]) {
-        loadQueue.async { [cache, iconLoader, loadState] in
+        loadQueue.async { [self] in
             let fresh = urls.filter { loadState.queuedURLs.insert($0).inserted }
             guard !fresh.isEmpty else { return }
             loadState.pendingURLs.append(contentsOf: fresh)
@@ -104,13 +178,17 @@ final class AppIconCache {
 
 /// Mutable pending-load state captured by `loadQueue` closures; array and set literals are
 /// immutable when captured directly.
-private final class IconLoadState {
+private final class IconLoadState: @unchecked Sendable {
     var pendingURLs: [URL] = []
     var queuedURLs = Set<URL>()
 }
 
 /// A classic 3x3 Lunchpad folder preview.
 final class FolderIconView: NSView {
+    var cornerRadius: CGFloat = 18 {
+        didSet { layer?.cornerRadius = cornerRadius }
+    }
+
     private let imageViews: [NSImageView] = (0..<9).map { _ in
         let imageView = NSImageView()
         imageView.imageScaling = .scaleProportionallyUpOrDown
@@ -120,7 +198,7 @@ final class FolderIconView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.cornerRadius = 18
+        layer?.cornerRadius = cornerRadius
         layer?.cornerCurve = .continuous
         layer?.backgroundColor = NSColor.white.withAlphaComponent(0.14).cgColor
         layer?.borderColor = NSColor.white.withAlphaComponent(0.24).cgColor
@@ -133,8 +211,10 @@ final class FolderIconView: NSView {
 
     override func layout() {
         super.layout()
-        let inset: CGFloat = 7
-        let gap: CGFloat = 3
+        // Proportions of the classic 80-point folder, so scaled and lifted folders match.
+        let unit = bounds.width / LunchpadGridMetrics.baseIconSide
+        let inset = 7 * unit
+        let gap = 3 * unit
         let length = (bounds.width - inset * 2 - gap * 2) / 3
 
         for (index, imageView) in imageViews.enumerated() {
@@ -185,6 +265,9 @@ final class AppIconCell: NSCollectionViewItem {
     private let folderIconView = FolderIconView()
     private let label = NSTextField(labelWithString: "")
     private let keyboardFocusLayer = CALayer()
+    private var sizeConstraints: [NSLayoutConstraint] = []
+    private var labelTopConstraint: NSLayoutConstraint!
+    private var appliedMetrics: LunchpadGridMetrics?
 
     /// A rounded translucent highlight behind the icon that composes with pressed alpha feedback.
     /// Setting it always re-applies the value, so reused cells cannot retain a stale active state.
@@ -202,11 +285,9 @@ final class AppIconCell: NSCollectionViewItem {
 
         folderIconView.translatesAutoresizingMaskIntoConstraints = false
 
-        label.font = .systemFont(ofSize: 12, weight: .regular)
         label.textColor = .white
         label.alignment = .center
         label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 2
         label.cell?.truncatesLastVisibleLine = true
         label.cell?.wraps = true
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -225,31 +306,55 @@ final class AppIconCell: NSCollectionViewItem {
         container.addSubview(folderIconView)
         container.addSubview(label)
 
-        NSLayoutConstraint.activate([
+        let standard = LunchpadGridMetrics.standard
+        sizeConstraints = [
+            iconView.widthAnchor.constraint(equalToConstant: standard.iconSide),
+            iconView.heightAnchor.constraint(equalToConstant: standard.iconSide),
+            folderIconView.widthAnchor.constraint(equalToConstant: standard.iconSide),
+            folderIconView.heightAnchor.constraint(equalToConstant: standard.iconSide),
+        ]
+        labelTopConstraint = label.topAnchor.constraint(
+            equalTo: iconView.bottomAnchor,
+            constant: standard.labelSpacing
+        )
+        NSLayoutConstraint.activate(sizeConstraints + [
             iconView.topAnchor.constraint(equalTo: container.topAnchor),
             iconView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 80),
-            iconView.heightAnchor.constraint(equalToConstant: 80),
 
             folderIconView.topAnchor.constraint(equalTo: container.topAnchor),
             folderIconView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            folderIconView.widthAnchor.constraint(equalToConstant: 80),
-            folderIconView.heightAnchor.constraint(equalToConstant: 80),
 
-            label.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 8),
+            labelTopConstraint,
             label.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             label.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             label.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor),
         ])
 
         view = container
+        apply(standard)
+    }
+
+    /// Sizes the icon, label, and focus highlight for the current display's grid metrics.
+    func apply(_ metrics: LunchpadGridMetrics) {
+        _ = view
+        guard metrics != appliedMetrics else { return }
+        appliedMetrics = metrics
+        for constraint in sizeConstraints {
+            constraint.constant = metrics.iconSide
+        }
+        labelTopConstraint.constant = metrics.labelSpacing
+        label.font = .systemFont(ofSize: metrics.labelFontSize, weight: .regular)
+        label.maximumNumberOfLines = metrics.labelLineLimit
+        keyboardFocusLayer.cornerRadius = 18 * metrics.scale
+        folderIconView.cornerRadius = 18 * metrics.scale
+        view.needsLayout = true
     }
 
     override func viewDidLayout() {
         super.viewDidLayout()
         // Align the backing layer frame with the icon area after Auto Layout settles.
         let iconFrame = iconView.frame
-        let padding: CGFloat = 8
+        let padding = 8 * (appliedMetrics?.scale ?? 1)
         keyboardFocusLayer.frame = NSRect(
             x: iconFrame.minX - padding,
             y: iconFrame.minY - padding,
