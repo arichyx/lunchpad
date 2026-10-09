@@ -12,8 +12,8 @@ final class DragInteractionTests: XCTestCase {
     private var collectionView: LunchpadCollectionView!
     private var commits: [LunchpadDragCommit]!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         makeGrid(itemCount: 5)
     }
 
@@ -45,12 +45,12 @@ final class DragInteractionTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         grid = nil
         window = nil
         collectionView = nil
         commits = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func app(_ name: String) -> AppItem {

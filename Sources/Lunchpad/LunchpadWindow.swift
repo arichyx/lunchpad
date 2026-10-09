@@ -119,8 +119,16 @@ final class LunchpadWindow: NSWindow {
     private let rootPageStore: RootPageStore
     /// Delivered when the user completes a drag arrangement; the owner persists it.
     var onDragCommit: ((LunchpadDragCommit) -> Void)?
+    /// Delivered when an application could not be opened after the launcher closed.
+    var onLaunchFailure: ((AppItem, Error) -> Void)?
+    /// Delivered with a folder identifier and its new name.
+    var onFolderRename: ((String, String) -> Void)?
+    /// Delivered with the identifier of a user folder to delete.
+    var onFolderDelete: ((String) -> Void)?
     private(set) var isAnimatingClose = false
     private var presentationGeneration = 0
+    /// The display hosting the current presentation, used to follow display reconfigurations.
+    private var presentedDisplayID: CGDirectDisplayID?
     private var menuBarGradientHeightConstraint: NSLayoutConstraint!
 
     init(
@@ -178,6 +186,15 @@ final class LunchpadWindow: NSWindow {
         gridView.onDragCommit = { [weak self] commit in
             self?.onDragCommit?(commit)
         }
+        gridView.onLaunchFailure = { [weak self] app, error in
+            self?.onLaunchFailure?(app, error)
+        }
+        gridView.onFolderRename = { [weak self] identifier, name in
+            self?.onFolderRename?(identifier, name)
+        }
+        gridView.onFolderDelete = { [weak self] identifier in
+            self?.onFolderDelete?(identifier)
+        }
         contentView = rootView
 
         menuBarGradientHeightConstraint = menuBarGradientView.heightAnchor.constraint(
@@ -206,24 +223,9 @@ final class LunchpadWindow: NSWindow {
     func show(on targetScreen: NSScreen? = nil) {
         let screen = targetScreen ?? NSScreen.main
         if let screen {
-            let contentFrame = presentationFrame(for: screen)
-            setFrame(contentFrame, display: true)
-            backdropWindow.setFrame(screen.frame, display: true)
-            if let cornerFrame = menuBarDockCornerFrame(
-                for: screen,
-                contentFrame: contentFrame
-            ) {
-                menuBarDockCornerWindow.setFrame(cornerFrame, display: true)
-            } else {
-                menuBarDockCornerWindow.orderOut(nil)
-                menuBarDockCornerWindow.setFrame(.zero, display: false)
-            }
-            let insets = contentInsets(for: screen, contentFrame: contentFrame)
-            menuBarGradientHeightConstraint.constant = max(96, insets.top + 72)
-            menuBarDockCornerWindow.gradientView.referenceHeight =
-                menuBarGradientHeightConstraint.constant
-            gridView.updateScreenInsets(insets, availableHeight: contentFrame.height)
+            applyGeometry(for: screen)
         }
+        presentedDisplayID = screen?.displayID
         let restoredRootPage = rootPageStore.restoredPage(
             availablePageCount: gridView.rootPageCount
         )
@@ -280,6 +282,54 @@ final class LunchpadWindow: NSWindow {
         }
     }
 
+    /// Keeps a visible launcher aligned with its display when the display configuration changes,
+    /// such as a resolution, arrangement, Dock, or menu-bar change. If the hosting display was
+    /// disconnected, the launcher closes rather than staying on a stale frame.
+    func screenParametersDidChange() {
+        guard isVisible, !isAnimatingClose else { return }
+        let screens = NSScreen.screens
+        guard let index = ScreenSelectionPolicy.presentedScreenIndex(
+            displayID: presentedDisplayID,
+            displayIDs: screens.map(\.displayID)
+        ) else {
+            close()
+            return
+        }
+
+        applyGeometry(for: screens[index])
+        if !menuBarDockCornerWindow.frame.isEmpty, !menuBarDockCornerWindow.isVisible {
+            menuBarDockCornerWindow.alphaValue = backdropWindow.alphaValue
+            menuBarDockCornerWindow.orderFrontRegardless()
+        }
+        rootView.layoutSubtreeIfNeeded()
+    }
+
+    /// Derives every launcher-owned window frame, safe-area inset, and grid height from one screen
+    /// so they cannot diverge.
+    private func applyGeometry(for screen: NSScreen) {
+        let contentFrame = presentationFrame(for: screen)
+        setFrame(contentFrame, display: true)
+        backdropWindow.setFrame(screen.frame, display: true)
+        if let cornerFrame = menuBarDockCornerFrame(
+            for: screen,
+            contentFrame: contentFrame
+        ) {
+            menuBarDockCornerWindow.setFrame(cornerFrame, display: true)
+        } else {
+            menuBarDockCornerWindow.orderOut(nil)
+            menuBarDockCornerWindow.setFrame(.zero, display: false)
+        }
+        let insets = contentInsets(for: screen, contentFrame: contentFrame)
+        menuBarGradientHeightConstraint.constant = max(96, insets.top + 72)
+        menuBarDockCornerWindow.gradientView.referenceHeight =
+            menuBarGradientHeightConstraint.constant
+        gridView.updateScreenInsets(
+            insets,
+            availableHeight: contentFrame.height,
+            availableWidth: contentFrame.width
+        )
+    }
+
     func update(
         items: [LunchpadItem],
         catalogChanged: Bool,
@@ -298,6 +348,7 @@ final class LunchpadWindow: NSWindow {
 
     override func close() {
         guard isVisible, !isAnimatingClose else { return }
+        gridView.commitFolderTitleEdit()
         rootPageStore.save(page: gridView.rootPageForPersistence)
         isAnimatingClose = true
         presentationGeneration &+= 1

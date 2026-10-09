@@ -57,5 +57,5 @@ let package = Package(
             dependencies: ["Lunchpad"]
         )
     ],
-    swiftLanguageModes: [.v5]
+    swiftLanguageModes: [.v6]
 )

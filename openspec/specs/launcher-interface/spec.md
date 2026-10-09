@@ -24,6 +24,12 @@ Lunchpad SHALL present a borderless, blurred interface across the active screen 
 - **WHEN** the active screen reports safe-area or menu-bar insets
 - **THEN** Lunchpad positions search, grid, and page controls outside the obstructed area while extending the background through the top edge
 
+#### Scenario: Display configuration changes while visible
+
+- **WHEN** the resolution, arrangement, Dock, or menu-bar geometry of the presenting display changes while the launcher is visible
+- **THEN** Lunchpad re-applies its window frames and grid layout to that display without changing the current page, folder, or search
+- **AND** if the presenting display is disconnected, Lunchpad closes instead
+
 ### Requirement: Fixed paged grid
 
 Lunchpad SHALL display root and folder contents in pages of at most 35 items arranged as seven columns by five rows.
@@ -38,14 +44,28 @@ Lunchpad SHALL display root and folder contents in pages of at most 35 items arr
 - **WHEN** searching or catalog synchronization reduces the available page count
 - **THEN** Lunchpad clamps the current page to the last valid page
 
+#### Scenario: Display is smaller than the classic grid
+
+- **WHEN** the presenting display cannot fit the classic 120 by 112 point items, 128 point side margins, and standard vertical spacing
+- **THEN** Lunchpad first reduces the side margins and vertical spacing, then scales items uniformly (to no less than 60 percent) so that all seven columns and five rows remain on screen without overlapping the search field or page indicator
+
 ### Requirement: Controlled page navigation
 
-Lunchpad SHALL support two-finger horizontal swipes and page-indicator clicks without allowing one continuous gesture to skip multiple pages. Plain directional arrow keys SHALL remain within the current page and MUST NOT change the current page.
+Lunchpad SHALL support two-finger horizontal swipes, background click-drag swipes, notched mouse
+wheels, and page-indicator clicks without allowing one continuous gesture to skip multiple pages.
+Plain directional arrow keys SHALL remain within the current page and MUST NOT change the current
+page.
 
 #### Scenario: User swipes left or right
 
-- **WHEN** horizontal scroll distance crosses the paging threshold
-- **THEN** a leftward swipe advances one page and a rightward swipe returns one page
+- **WHEN** a two-finger horizontal swipe or a horizontal click-drag on the background moves the current page
+- **THEN** the current page and its neighbors follow the pointer, rubber-banding past the first or last page
+- **AND** on release Lunchpad turns one page when the travel reaches 18 percent of the pager width or the release velocity reaches 550 points per second, and otherwise settles back on the current page
+
+#### Scenario: A new gesture starts while a page is settling
+
+- **WHEN** the user presses or begins a new swipe before a released swipe finishes settling
+- **THEN** Lunchpad commits the visible destination first and resolves the new input against that page
 
 #### Scenario: Trackpad momentum continues
 
@@ -54,8 +74,13 @@ Lunchpad SHALL support two-finger horizontal swipes and page-indicator clicks wi
 
 #### Scenario: User scrolls vertically over Lunchpad
 
-- **WHEN** a vertical scroll event reaches the launcher window
+- **WHEN** a trackpad or other phase-bearing vertical scroll reaches the launcher window
 - **THEN** Lunchpad consumes it without paging and without forwarding it to an underlying application
+
+#### Scenario: User turns a notched mouse wheel
+
+- **WHEN** a phase-less wheel event reaches the launcher window
+- **THEN** Lunchpad turns at most one page per 0.45 seconds along the dominant axis, a single line-based notch being enough, toward the previous page for scrolling toward earlier content and the next page otherwise
 
 #### Scenario: User clicks a page dot
 
@@ -259,11 +284,11 @@ Lunchpad SHALL animate presentation and dismissal with fixed-duration opacity tr
 - **WHEN** any close path is invoked
 - **THEN** the grid and full-screen backdrop fade out before their reusable windows are hidden
 
-### Requirement: Pointer-screen presentation for trackpad pinch
+### Requirement: Pointer-screen presentation
 
-Lunchpad SHALL sample the global pointer location when a recognized configured-finger inward pinch
-activates the hidden launcher and SHALL present the complete launcher on the connected screen
-containing that point. The interaction window, backdrop, menu-bar coverage, Dock exclusion, safe
+Lunchpad SHALL sample the global pointer location when a recognized configured-finger inward pinch,
+the global hot key, the status item, or its Show Lunchpad menu action activates the hidden launcher,
+and SHALL present the complete launcher on the connected screen containing that point. The interaction window, backdrop, menu-bar coverage, Dock exclusion, safe
 area layout, and grid layout SHALL all use the same selected screen for that presentation. If no
 connected screen contains the sampled point, Lunchpad SHALL fall back to the main screen.
 
@@ -285,6 +310,11 @@ connected screen contains the sampled point, Lunchpad SHALL fall back to the mai
   pointer location is outside every currently reported screen frame
 - **THEN** Lunchpad presents on the main screen without terminating or showing launcher-owned
   windows on different screens
+
+#### Scenario: Hot key is pressed with the pointer on another display
+
+- **WHEN** the launcher is hidden, the pointer is within a connected non-main display, and the user presses the global hot key
+- **THEN** Lunchpad presents its interaction and supporting windows on that display
 
 #### Scenario: Pointer moves after presentation begins
 

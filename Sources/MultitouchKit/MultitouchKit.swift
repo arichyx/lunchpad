@@ -24,13 +24,13 @@ public struct MultitouchContact: Sendable {
 /// A frame of touch data normalized to the 0...1 coordinate space.
 public struct MultitouchFrame: Sendable {
     public let contacts: [MultitouchContact]
+    /// Contacts that are neither idle nor leaving. Computed once because every recognizer and
+    /// the completion gate read it for each report.
+    public let activeContacts: [MultitouchContact]
 
     public init(contacts: [MultitouchContact]) {
         self.contacts = contacts
-    }
-
-    public var activeContacts: [MultitouchContact] {
-        contacts.filter(\.isActive)
+        activeContacts = contacts.filter(\.isActive)
     }
 }
 
@@ -45,6 +45,17 @@ public struct MultitouchPacketParser: Sendable {
     }
 
     public func parse(_ bytes: [UInt8]) -> MultitouchFrame? {
+        bytes.withUnsafeBytes { parse($0) }
+    }
+
+    /// Parses one report in place, so the read loop can reuse a single dequeue buffer.
+    func parse(_ bytes: UnsafeRawBufferPointer) -> MultitouchFrame? {
+        // Coordinates are normalized by the sensor size; an unusable size cannot produce
+        // meaningful contacts.
+        guard sensorWidth.isFinite, sensorWidth > 0,
+              sensorHeight.isFinite, sensorHeight > 0 else {
+            return nil
+        }
         guard bytes.count >= 32, bytes[0] == 0x75 else { return nil }
 
         let headerSize = Int(bytes[2])
@@ -91,42 +102,61 @@ public struct MultitouchPacketParser: Sendable {
         return MultitouchFrame(contacts: contacts)
     }
 
-    private func littleEndianUInt16(_ bytes: [UInt8], at offset: Int) -> UInt16 {
+    private func littleEndianUInt16(_ bytes: UnsafeRawBufferPointer, at offset: Int) -> UInt16 {
         UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
     }
 }
 
-/// Detects an inward pinch using the mean pairwise distance between all tracked contacts.
-public struct PinchRecognizer: Sendable {
-    public let fingerCount: Int
-    public let maximumContactCount: Int
-    public let contractionThreshold: Double
-    public let minimumStartingDistance: Double
-    public let maximumDuration: TimeInterval
+/// The shared state machine behind `PinchRecognizer` and `ExpandRecognizer`.
+///
+/// It locks onto the configured contact identifiers, measures their mean pairwise distance, and
+/// fires once when that distance moves far enough from the extreme reached during the contact
+/// sequence: the maximum for a contraction, the minimum for an expansion. Losing a locked contact
+/// rebuilds the baseline, and a baseline older than `maximumDuration` is restarted so a long
+/// stationary hold cannot trigger late.
+struct ContactSpreadTracker: Sendable {
+    enum Direction: Sendable {
+        case contraction
+        case expansion
+    }
 
-    private var maximumDistance: Double?
+    let fingerCount: Int
+    let maximumContactCount: Int
+    let direction: Direction
+    /// Ratio of the current distance to the extreme distance that completes the gesture.
+    let threshold: Double
+    let minimumStartingDistance: Double
+    let maximumDuration: TimeInterval
+
+    private var extremeDistance: Double?
     private var startedAt: TimeInterval?
     private var hasTriggered = false
     private var trackedIdentifiers: Set<UInt8>?
 
-    public init(
-        fingerCount: Int = 4,
-        maximumContactCount: Int? = nil,
-        contractionThreshold: Double = 0.82,
-        minimumStartingDistance: Double = 0.06,
-        maximumDuration: TimeInterval = 3.0
+    /// Three-finger mode must not claim a deliberate four-finger system gesture. Four-finger mode
+    /// tolerates a transient fifth driver contact by tracking the original four identifiers.
+    static func defaultMaximumContactCount(forFingerCount fingerCount: Int) -> Int {
+        fingerCount == 4 ? 5 : fingerCount
+    }
+
+    init(
+        fingerCount: Int,
+        maximumContactCount: Int?,
+        direction: Direction,
+        threshold: Double,
+        minimumStartingDistance: Double,
+        maximumDuration: TimeInterval
     ) {
         self.fingerCount = fingerCount
-        self.maximumContactCount = maximumContactCount ?? (fingerCount == 4 ? 5 : fingerCount)
-        self.contractionThreshold = contractionThreshold
+        self.maximumContactCount = maximumContactCount
+            ?? Self.defaultMaximumContactCount(forFingerCount: fingerCount)
+        self.direction = direction
+        self.threshold = threshold
         self.minimumStartingDistance = minimumStartingDistance
         self.maximumDuration = maximumDuration
     }
 
-    public mutating func process(
-        _ frame: MultitouchFrame,
-        at timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime
-    ) -> Bool {
+    mutating func process(_ frame: MultitouchFrame, at timestamp: TimeInterval) -> Bool {
         let activeContacts = frame.activeContacts
         guard activeContacts.count >= fingerCount,
               activeContacts.count <= maximumContactCount else {
@@ -150,27 +180,33 @@ public struct PinchRecognizer: Sendable {
             trackedIdentifiers = Set(contacts.map(\.identifier))
         }
 
-        let distance = meanPairwiseDistance(of: contacts)
-        if startedAt == nil {
+        let distance = Self.meanPairwiseDistance(of: contacts)
+        guard let startedAt else {
             startedAt = timestamp
-            maximumDistance = distance
+            extremeDistance = distance
             return false
         }
 
-        guard let startedAt else { return false }
         if timestamp - startedAt > maximumDuration {
             // Reset the baseline after a long stationary period to prevent delayed triggers.
             self.startedAt = timestamp
-            maximumDistance = distance
+            extremeDistance = distance
             hasTriggered = false
             return false
         }
 
-        maximumDistance = max(maximumDistance ?? distance, distance)
+        let extreme: Double
+        switch direction {
+        case .contraction:
+            extreme = max(extremeDistance ?? distance, distance)
+        case .expansion:
+            extreme = min(extremeDistance ?? distance, distance)
+        }
+        extremeDistance = extreme
+
         guard !hasTriggered,
-              let maximumDistance,
-              maximumDistance >= minimumStartingDistance,
-              distance / maximumDistance <= contractionThreshold else {
+              extreme >= minimumStartingDistance,
+              thresholdReached(ratio: distance / extreme) else {
             return false
         }
 
@@ -178,14 +214,23 @@ public struct PinchRecognizer: Sendable {
         return true
     }
 
+    private func thresholdReached(ratio: Double) -> Bool {
+        switch direction {
+        case .contraction:
+            ratio <= threshold
+        case .expansion:
+            ratio >= threshold
+        }
+    }
+
     private mutating func reset() {
-        maximumDistance = nil
+        extremeDistance = nil
         startedAt = nil
         hasTriggered = false
         trackedIdentifiers = nil
     }
 
-    private func meanPairwiseDistance(of contacts: [MultitouchContact]) -> Double {
+    static func meanPairwiseDistance(of contacts: [MultitouchContact]) -> Double {
         var total = 0.0
         var pairCount = 0
         for first in contacts.indices {
@@ -201,24 +246,54 @@ public struct PinchRecognizer: Sendable {
     }
 }
 
-/// Detects an outward spread (expand / unpinch) using the mean pairwise distance between all
-/// tracked contacts. It is the symmetric counterpart to `PinchRecognizer`: instead of tracking the
-/// maximum distance reached and firing on contraction, it tracks the minimum distance reached and
-/// fires once when the current distance expands past the expansion threshold relative to that
-/// minimum. The configured-contact identifier lock, extra-contact policy, and stationary-too-long
-/// baseline reset mirror the pinch recognizer. A dismissal gesture is only meaningful while the
-/// launcher is already visible; visibility is enforced by the app layer, not here.
-public struct ExpandRecognizer: Sendable {
-    public let fingerCount: Int
-    public let maximumContactCount: Int
-    public let expansionThreshold: Double
-    public let minimumStartingDistance: Double
-    public let maximumDuration: TimeInterval
+/// Detects an inward pinch using the mean pairwise distance between all tracked contacts. It
+/// fires once when the distance contracts below `contractionThreshold` of the maximum reached.
+public struct PinchRecognizer: Sendable {
+    private var tracker: ContactSpreadTracker
 
-    private var minimumDistance: Double?
-    private var startedAt: TimeInterval?
-    private var hasTriggered = false
-    private var trackedIdentifiers: Set<UInt8>?
+    public var fingerCount: Int { tracker.fingerCount }
+    public var maximumContactCount: Int { tracker.maximumContactCount }
+    public var contractionThreshold: Double { tracker.threshold }
+    public var minimumStartingDistance: Double { tracker.minimumStartingDistance }
+    public var maximumDuration: TimeInterval { tracker.maximumDuration }
+
+    public init(
+        fingerCount: Int = 4,
+        maximumContactCount: Int? = nil,
+        contractionThreshold: Double = 0.82,
+        minimumStartingDistance: Double = 0.06,
+        maximumDuration: TimeInterval = 3.0
+    ) {
+        tracker = ContactSpreadTracker(
+            fingerCount: fingerCount,
+            maximumContactCount: maximumContactCount,
+            direction: .contraction,
+            threshold: contractionThreshold,
+            minimumStartingDistance: minimumStartingDistance,
+            maximumDuration: maximumDuration
+        )
+    }
+
+    public mutating func process(
+        _ frame: MultitouchFrame,
+        at timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> Bool {
+        tracker.process(frame, at: timestamp)
+    }
+}
+
+/// Detects an outward spread (expand / unpinch), the symmetric counterpart to `PinchRecognizer`:
+/// it fires once when the distance expands past `expansionThreshold` of the minimum reached. A
+/// dismissal gesture is only meaningful while the launcher is already visible; visibility is
+/// enforced by the app layer, not here.
+public struct ExpandRecognizer: Sendable {
+    private var tracker: ContactSpreadTracker
+
+    public var fingerCount: Int { tracker.fingerCount }
+    public var maximumContactCount: Int { tracker.maximumContactCount }
+    public var expansionThreshold: Double { tracker.threshold }
+    public var minimumStartingDistance: Double { tracker.minimumStartingDistance }
+    public var maximumDuration: TimeInterval { tracker.maximumDuration }
 
     public init(
         fingerCount: Int = 4,
@@ -228,88 +303,21 @@ public struct ExpandRecognizer: Sendable {
         minimumStartingDistance: Double = 0.06,
         maximumDuration: TimeInterval = 3.0
     ) {
-        self.fingerCount = fingerCount
-        self.maximumContactCount = maximumContactCount ?? (fingerCount == 4 ? 5 : fingerCount)
-        self.expansionThreshold = expansionThreshold
-        self.minimumStartingDistance = minimumStartingDistance
-        self.maximumDuration = maximumDuration
+        tracker = ContactSpreadTracker(
+            fingerCount: fingerCount,
+            maximumContactCount: maximumContactCount,
+            direction: .expansion,
+            threshold: expansionThreshold,
+            minimumStartingDistance: minimumStartingDistance,
+            maximumDuration: maximumDuration
+        )
     }
 
     public mutating func process(
         _ frame: MultitouchFrame,
         at timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime
     ) -> Bool {
-        let activeContacts = frame.activeContacts
-        guard activeContacts.count >= fingerCount,
-              activeContacts.count <= maximumContactCount else {
-            reset()
-            return false
-        }
-
-        let contacts: [MultitouchContact]
-        if let trackedIdentifiers {
-            let tracked = activeContacts.filter { trackedIdentifiers.contains($0.identifier) }
-            if tracked.count == fingerCount {
-                contacts = tracked
-            } else {
-                // Rebuild the baseline only when one of the locked contacts disappears.
-                reset()
-                contacts = Array(activeContacts.prefix(fingerCount))
-                self.trackedIdentifiers = Set(contacts.map(\.identifier))
-            }
-        } else {
-            contacts = Array(activeContacts.prefix(fingerCount))
-            trackedIdentifiers = Set(contacts.map(\.identifier))
-        }
-
-        let distance = meanPairwiseDistance(of: contacts)
-        if startedAt == nil {
-            startedAt = timestamp
-            minimumDistance = distance
-            return false
-        }
-
-        guard let startedAt else { return false }
-        if timestamp - startedAt > maximumDuration {
-            // Reset the baseline after a long stationary period to prevent delayed triggers.
-            self.startedAt = timestamp
-            minimumDistance = distance
-            hasTriggered = false
-            return false
-        }
-
-        minimumDistance = min(minimumDistance ?? distance, distance)
-        guard !hasTriggered,
-              let minimumDistance,
-              minimumDistance >= minimumStartingDistance,
-              distance / minimumDistance >= expansionThreshold else {
-            return false
-        }
-
-        hasTriggered = true
-        return true
-    }
-
-    private mutating func reset() {
-        minimumDistance = nil
-        startedAt = nil
-        hasTriggered = false
-        trackedIdentifiers = nil
-    }
-
-    private func meanPairwiseDistance(of contacts: [MultitouchContact]) -> Double {
-        var total = 0.0
-        var pairCount = 0
-        for first in contacts.indices {
-            for second in contacts.indices where second > first {
-                total += hypot(
-                    contacts[first].x - contacts[second].x,
-                    contacts[first].y - contacts[second].y
-                )
-                pairCount += 1
-            }
-        }
-        return pairCount == 0 ? 0 : total / Double(pairCount)
+        tracker.process(frame, at: timestamp)
     }
 }
 
@@ -323,18 +331,25 @@ enum PinchCompletionAction: Sendable, Equatable {
     case dismiss
 }
 
-/// Samples activation policy at the beginning of a contact sequence and waits for release before
-/// returning the result. Sampling on the first contact preserves the pre-restore desktop state.
+/// Samples activation policy at the beginning of a multi-finger contact sequence and waits for
+/// release before returning the result. Sampling when the second contact lands preserves the
+/// pre-restore desktop state: a single contact (pointer movement, taps, clicks) can never become a
+/// multi-finger gesture, and the second contact still lands before any multi-finger motion lets
+/// macOS restore displaced windows. Skipping single-contact sequences keeps ordinary pointer use
+/// from querying WindowServer.
 ///
 /// Both the inward pinch and the outward spread flow through this gate. Whichever direction reaches
 /// its threshold first becomes the pending outcome for that contact sequence; the other is ignored
 /// until the sequence resets, so a single gesture emits at most one action. The activation policy
-/// (Show Desktop suppression) is sampled on the first contact and consulted only for the pinch
+/// (Show Desktop suppression) is sampled once per sequence and consulted only for the pinch
 /// outcome; a dismissal never depends on it.
 ///
 /// A sequence that exceeds the configured contact policy is rejected until every contact lifts.
 /// This lets strict three-finger mode avoid claiming the tail of a four-finger system gesture.
 struct PinchCompletionGate: Sendable {
+    /// The active contact count at which a sequence first samples the activation policy.
+    static let activationSamplingContactCount = 2
+
     private var pending = PendingGesture.none
     private var activationAllowed: Bool?
     private var ignoringUntilRelease = false
@@ -364,9 +379,11 @@ struct PinchCompletionGate: Sendable {
             return nil
         }
 
-        // Sample once on the first contact of a sequence, before macOS restores displaced windows.
-        // This value is read only when emitting a pinch activation; dismissals ignore it.
-        if activationAllowed == nil, activeContactCount > 0 {
+        // Sample once per sequence, when the second contact lands and before macOS can restore
+        // displaced windows. This value is read only when emitting a pinch activation; dismissals
+        // ignore it.
+        if activationAllowed == nil,
+           activeContactCount >= Self.activationSamplingContactCount {
             activationAllowed = evaluateActivation()
         }
 
@@ -457,9 +474,9 @@ public final class MultitouchMonitor: @unchecked Sendable {
     private var notificationPort: mach_port_t = 0
 
     public init(fingerCount: Int = 4) {
-        // Three-finger mode must not claim a deliberate four-finger system gesture. Four-finger
-        // mode retains the existing tolerance for a transient fifth driver contact.
-        maximumContactCount = fingerCount == 4 ? 5 : fingerCount
+        maximumContactCount = ContactSpreadTracker.defaultMaximumContactCount(
+            forFingerCount: fingerCount
+        )
         recognizer = PinchRecognizer(
             fingerCount: fingerCount,
             maximumContactCount: maximumContactCount
@@ -475,13 +492,7 @@ public final class MultitouchMonitor: @unchecked Sendable {
         defer { stateLock.unlock() }
         guard !running else { return }
 
-        guard let matching = IOServiceMatching("AppleMultitouchDevice") else {
-            throw MultitouchMonitorError.serviceNotFound
-        }
-        let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
-        guard service != IO_OBJECT_NULL else {
-            throw MultitouchMonitorError.serviceNotFound
-        }
+        let service = try Self.preferredMultitouchService()
         defer { IOObjectRelease(service) }
 
         var openedConnection: io_connect_t = 0
@@ -537,9 +548,19 @@ public final class MultitouchMonitor: @unchecked Sendable {
             throw MultitouchMonitorError.call("Start touch data stream", result)
         }
 
-        let sensorWidth = Self.numberProperty(service, key: "Sensor Surface Width") ?? 15_600
-        let sensorHeight = Self.numberProperty(service, key: "Sensor Surface Height") ?? 9_600
-        let maximumPacketSize = Int(Self.numberProperty(service, key: "Max Packet Size") ?? 4_096)
+        // Registry values come from the driver and are untrusted; fall back to the verified
+        // built-in trackpad values when they are missing or unusable.
+        let sensorWidth = Self.validatedSensorDimension(
+            Self.numberProperty(service, key: "Sensor Surface Width"),
+            fallback: 15_600
+        )
+        let sensorHeight = Self.validatedSensorDimension(
+            Self.numberProperty(service, key: "Sensor Surface Height"),
+            fallback: 9_600
+        )
+        let maximumPacketSize = Self.validatedPacketSize(
+            Self.numberProperty(service, key: "Max Packet Size")
+        )
         let parser = MultitouchPacketParser(sensorWidth: sensorWidth, sensorHeight: sensorHeight)
 
         connection = openedConnection
@@ -602,6 +623,9 @@ public final class MultitouchMonitor: @unchecked Sendable {
             stateLock.unlock()
         }
 
+        // One reusable dequeue buffer; reports are parsed in place.
+        var buffer = [UInt8](repeating: 0, count: maximumPacketSize)
+
         while isRunning {
             let result = IODataQueueWaitForAvailableData(dataQueue, port)
             guard result == KERN_SUCCESS else {
@@ -614,43 +638,52 @@ public final class MultitouchMonitor: @unchecked Sendable {
             // This loop is one long-lived dispatch work item, so libdispatch cannot drain its
             // autorelease pool until monitoring stops. Bound AppKit and Core Foundation
             // temporaries created by callbacks to each batch of queued reports.
-            autoreleasepool {
+            let keepReading = autoreleasepool { () -> Bool in
                 while isRunning && IODataQueueDataAvailable(dataQueue) {
-                    var bytes = [UInt8](repeating: 0, count: maximumPacketSize)
-                    var size = UInt32(bytes.count)
-                    let dequeueResult = bytes.withUnsafeMutableBytes { buffer in
-                        IODataQueueDequeue(dataQueue, buffer.baseAddress, &size)
+                    var size = UInt32(buffer.count)
+                    let dequeueResult = buffer.withUnsafeMutableBytes { bytes in
+                        IODataQueueDequeue(dataQueue, bytes.baseAddress, &size)
                     }
-                    guard dequeueResult == KERN_SUCCESS else {
+                    guard dequeueResult == KERN_SUCCESS, Int(size) <= buffer.count else {
+                        // A failed dequeue leaves the report in the queue, so waiting again would
+                        // return immediately and spin. Stop and report instead.
                         onError?(.call("Read touch data", dequeueResult))
-                        break
+                        return false
                     }
 
-                    bytes.removeSubrange(Int(size)..<bytes.count)
-                    guard let frame = parser.parse(bytes) else { continue }
-                    let pinchDetected = recognizer.process(frame)
-                    let expandDetected = expandRecognizer.process(frame)
-                    onFrame?(frame)
-                    let completionAction = completionGate.process(
-                        frame,
-                        pinchDetected: pinchDetected,
-                        expandDetected: expandDetected,
-                        sequenceEligible: frame.activeContacts.count <= maximumContactCount
-                    ) { [weak self] in
-                        self?.shouldActivatePinch?() ?? true
+                    let frame = buffer.withUnsafeBytes { bytes in
+                        parser.parse(UnsafeRawBufferPointer(rebasing: bytes[0..<Int(size)]))
                     }
-                    if let completionAction {
-                        switch completionAction {
-                        case .activate:
-                            onPinch?()
-                        case .suppress:
-                            onPinchSuppressed?()
-                        case .dismiss:
-                            onExpand?()
-                        }
-                    }
+                    guard let frame else { continue }
+                    process(frame)
                 }
+                return true
             }
+            guard keepReading else { break }
+        }
+    }
+
+    private func process(_ frame: MultitouchFrame) {
+        let pinchDetected = recognizer.process(frame)
+        let expandDetected = expandRecognizer.process(frame)
+        onFrame?(frame)
+        let completionAction = completionGate.process(
+            frame,
+            pinchDetected: pinchDetected,
+            expandDetected: expandDetected,
+            sequenceEligible: frame.activeContacts.count <= maximumContactCount
+        ) { [weak self] in
+            self?.shouldActivatePinch?() ?? true
+        }
+        switch completionAction {
+        case .activate:
+            onPinch?()
+        case .suppress:
+            onPinchSuppressed?()
+        case .dismiss:
+            onExpand?()
+        case nil:
+            break
         }
     }
 
@@ -658,6 +691,54 @@ public final class MultitouchMonitor: @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         return running
+    }
+
+    /// Returns the built-in trackpad when several multitouch devices are attached. A Magic Mouse
+    /// or external trackpad also publishes `AppleMultitouchDevice`, but only the built-in report
+    /// format is verified, so registry order must not decide which device is monitored.
+    private static func preferredMultitouchService() throws -> io_service_t {
+        guard let matching = IOServiceMatching("AppleMultitouchDevice") else {
+            throw MultitouchMonitorError.serviceNotFound
+        }
+        var iterator: io_iterator_t = 0
+        let result = IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator)
+        guard result == KERN_SUCCESS else {
+            throw MultitouchMonitorError.call("IOServiceGetMatchingServices", result)
+        }
+        defer { IOObjectRelease(iterator) }
+
+        var services: [io_service_t] = []
+        while case let service = IOIteratorNext(iterator), service != IO_OBJECT_NULL {
+            services.append(service)
+        }
+        let builtInFlags = services.map { boolProperty($0, key: "MT Built-In") }
+        guard let index = preferredDeviceIndex(builtInFlags: builtInFlags) else {
+            throw MultitouchMonitorError.serviceNotFound
+        }
+        for (offset, service) in services.enumerated() where offset != index {
+            IOObjectRelease(service)
+        }
+        return services[index]
+    }
+
+    /// Prefers the first built-in device and otherwise keeps registry order.
+    static func preferredDeviceIndex(builtInFlags: [Bool?]) -> Int? {
+        builtInFlags.firstIndex(of: true) ?? (builtInFlags.isEmpty ? nil : 0)
+    }
+
+    /// A sensor dimension normalizes coordinates, so it must be a positive, finite number.
+    static func validatedSensorDimension(_ reported: Double?, fallback: Double) -> Double {
+        guard let reported, reported.isFinite, reported > 0 else { return fallback }
+        return reported
+    }
+
+    /// The dequeue buffer must hold at least one report header and stay reasonably bounded.
+    static func validatedPacketSize(_ reported: Double?) -> Int {
+        let fallback = 4_096
+        guard let reported, reported.isFinite, reported >= 64, reported <= 1_048_576 else {
+            return fallback
+        }
+        return Int(reported)
     }
 
     private static func numberProperty(_ service: io_service_t, key: String) -> Double? {
@@ -670,5 +751,89 @@ public final class MultitouchMonitor: @unchecked Sendable {
             return nil
         }
         return (rawValue.takeRetainedValue() as? NSNumber)?.doubleValue
+    }
+
+    private static func boolProperty(_ service: io_service_t, key: String) -> Bool? {
+        guard let rawValue = IORegistryEntryCreateCFProperty(
+            service,
+            key as CFString,
+            kCFAllocatorDefault,
+            0
+        ) else {
+            return nil
+        }
+        return (rawValue.takeRetainedValue() as? NSNumber)?.boolValue
+    }
+}
+
+/// Reports `AppleMultitouchDevice` arrivals and removals. A monitor whose device disappears may
+/// never receive another report, and a reconnected trackpad needs a fresh user-client connection,
+/// so the app rebuilds its monitor when this observer fires.
+public final class MultitouchDeviceObserver {
+    private let onChange: () -> Void
+    private var notificationPort: IONotificationPortRef?
+    private var iterators: [io_iterator_t] = []
+
+    /// `onChange` runs on `queue` for every arrival or removal after the observer starts;
+    /// devices that already exist are not reported.
+    public init(queue: DispatchQueue = .main, onChange: @escaping () -> Void) throws {
+        self.onChange = onChange
+        guard let port = IONotificationPortCreate(kIOMainPortDefault) else {
+            throw MultitouchMonitorError.call("IONotificationPortCreate", KERN_RESOURCE_SHORTAGE)
+        }
+        notificationPort = port
+        IONotificationPortSetDispatchQueue(port, queue)
+
+        let callback: IOServiceMatchingCallback = { refcon, iterator in
+            guard let refcon else { return }
+            let observer = Unmanaged<MultitouchDeviceObserver>
+                .fromOpaque(refcon)
+                .takeUnretainedValue()
+            // Draining the iterator re-arms the notification.
+            MultitouchDeviceObserver.drain(iterator)
+            observer.onChange()
+        }
+
+        for notificationType in [kIOFirstMatchNotification, kIOTerminatedNotification] {
+            guard let matching = IOServiceMatching("AppleMultitouchDevice") else {
+                invalidate()
+                throw MultitouchMonitorError.serviceNotFound
+            }
+            var iterator: io_iterator_t = 0
+            let result = IOServiceAddMatchingNotification(
+                port,
+                notificationType,
+                matching,
+                callback,
+                Unmanaged.passUnretained(self).toOpaque(),
+                &iterator
+            )
+            guard result == KERN_SUCCESS else {
+                invalidate()
+                throw MultitouchMonitorError.call("IOServiceAddMatchingNotification", result)
+            }
+            iterators.append(iterator)
+            // The initial contents describe devices that already exist; consume them silently.
+            Self.drain(iterator)
+        }
+    }
+
+    deinit {
+        invalidate()
+    }
+
+    private func invalidate() {
+        iterators.forEach { IOObjectRelease($0) }
+        iterators.removeAll()
+        if let notificationPort {
+            IONotificationPortDestroy(notificationPort)
+            self.notificationPort = nil
+        }
+    }
+
+    private static func drain(_ iterator: io_iterator_t) {
+        while case let service = IOIteratorNext(iterator), service != IO_OBJECT_NULL {
+            IOObjectRelease(service)
+        }
     }
 }

@@ -189,10 +189,8 @@ public struct ShowDesktopStateDetector: Sendable {
         guard let processIdentifier = entry[kCGWindowOwnerPID] as? NSNumber,
               let layer = entry[kCGWindowLayer] as? NSNumber,
               let alpha = entry[kCGWindowAlpha] as? NSNumber,
-              let boundsValue = entry[kCGWindowBounds],
-              let bounds = CGRect(
-                  dictionaryRepresentation: boundsValue as! CFDictionary
-              ) else {
+              let boundsDictionary = entry[kCGWindowBounds] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: boundsDictionary) else {
             return nil
         }
 

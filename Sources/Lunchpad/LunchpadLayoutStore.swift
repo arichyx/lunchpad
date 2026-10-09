@@ -9,10 +9,13 @@ enum LunchpadLayoutStoreError: Error, CustomStringConvertible {
     case folderNotFound
     case applicationNotFound
     case protectedSystemFolder
+    case unsupportedSchemaVersion(Int64)
 
     var description: String {
         switch self {
         case .sqlite(let message): message
+        case .unsupportedSchemaVersion(let version):
+            "Layout database schema version \(version) is newer than this build supports"
         case .invalidFolderName: "Folder name must not be empty"
         case .folderNotFound: "Folder not found"
         case .applicationNotFound: "Application not found"
@@ -24,6 +27,9 @@ enum LunchpadLayoutStoreError: Error, CustomStringConvertible {
 /// Lunchpad's layout database. Finder paths locate apps; this store owns folder assignments.
 final class LunchpadLayoutStore: @unchecked Sendable {
     static let otherFolderIdentifier = "system.other"
+    /// The newest schema this build can read and write. Raise it together with a new step in
+    /// `migrate()`.
+    static let currentSchemaVersion: Int64 = 1
     private static let defaultOtherSortPosition: Int64 = 9_000_000_000
 
     private enum AssignmentSource: String {
@@ -42,6 +48,22 @@ final class LunchpadLayoutStore: @unchecked Sendable {
     private struct ExistingAssignment {
         let folderIdentifier: String?
         let source: AssignmentSource
+    }
+
+    private struct StoredApplication {
+        let bundleIdentifier: String?
+        let displayName: String
+        let path: String
+        let folderIdentifier: String?
+        let source: AssignmentSource
+        let isPresent: Bool
+
+        func needsUpdate(for app: AppItem) -> Bool {
+            !isPresent
+                || bundleIdentifier != app.bundleIdentifier
+                || displayName != app.name
+                || path != app.url.path
+        }
     }
 
     private struct PositionedItem {
@@ -101,6 +123,10 @@ final class LunchpadLayoutStore: @unchecked Sendable {
     }
 
     /// Reconciles discovered applications and loads the root and logical-folder layout.
+    ///
+    /// Only rows whose metadata or presence changed are written, so a refresh that finds the same
+    /// applications leaves the database untouched. `last_seen_at` therefore records when an
+    /// application last appeared or changed, not every scan that observed it.
     func reconcile(_ discoveredApplications: [DiscoveredApplication]) throws -> [LunchpadItem] {
         try withAccessLock {
             try transaction {
@@ -110,27 +136,32 @@ final class LunchpadLayoutStore: @unchecked Sendable {
                 var nextOtherPosition = try nextApplicationPosition(
                     folderIdentifier: Self.otherFolderIdentifier
                 )
-                try execute("UPDATE applications SET is_present = 0")
+                let storedApplications = try loadStoredApplications()
+                var discoveredIdentifiers = Set<String>()
                 let now = Date().timeIntervalSince1970
 
                 for discovered in discoveredApplications {
                     let app = discovered.item
-                    if let existing = try existingAssignment(for: app.identifier) {
-                        try execute(
-                            """
-                            UPDATE applications
-                            SET bundle_identifier = ?, display_name = ?, path = ?,
-                                is_present = 1, last_seen_at = ?
-                            WHERE id = ?
-                            """,
-                            [
-                                app.bundleIdentifier.map(Value.text) ?? .null,
-                                .text(app.name),
-                                .text(app.url.path),
-                                .double(now),
-                                .text(app.identifier),
-                            ]
-                        )
+                    guard discoveredIdentifiers.insert(app.identifier).inserted else { continue }
+
+                    if let existing = storedApplications[app.identifier] {
+                        if existing.needsUpdate(for: app) {
+                            try execute(
+                                """
+                                UPDATE applications
+                                SET bundle_identifier = ?, display_name = ?, path = ?,
+                                    is_present = 1, last_seen_at = ?
+                                WHERE id = ?
+                                """,
+                                [
+                                    app.bundleIdentifier.map(Value.text) ?? .null,
+                                    .text(app.name),
+                                    .text(app.url.path),
+                                    .double(now),
+                                    .text(app.identifier),
+                                ]
+                            )
+                        }
 
                         // Only untouched root applications may receive the default Other
                         // assignment.
@@ -184,9 +215,50 @@ final class LunchpadLayoutStore: @unchecked Sendable {
                         ]
                     )
                 }
+
+                // Applications missing from this snapshot keep their layout for a reinstall.
+                for (identifier, stored) in storedApplications
+                where stored.isPresent && !discoveredIdentifiers.contains(identifier) {
+                    try execute(
+                        "UPDATE applications SET is_present = 0 WHERE id = ?",
+                        [.text(identifier)]
+                    )
+                }
             }
 
             return try loadVisibleItems()
+        }
+    }
+
+    private func loadStoredApplications() throws -> [String: StoredApplication] {
+        let statement = try prepare(
+            """
+            SELECT id, bundle_identifier, display_name, path, folder_id,
+                   assignment_source, is_present
+            FROM applications
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+
+        var applications: [String: StoredApplication] = [:]
+        while try step(statement) == SQLITE_ROW {
+            applications[textColumn(statement, index: 0)] = StoredApplication(
+                bundleIdentifier: optionalTextColumn(statement, index: 1),
+                displayName: textColumn(statement, index: 2),
+                path: textColumn(statement, index: 3),
+                folderIdentifier: optionalTextColumn(statement, index: 4),
+                source: AssignmentSource(rawValue: textColumn(statement, index: 5)) ?? .none,
+                isPresent: sqlite3_column_int(statement, 6) != 0
+            )
+        }
+        return applications
+    }
+
+    /// Total rows changed through this connection since it opened. Tests use it to verify that
+    /// unchanged refreshes do not write.
+    var totalChangeCount: Int64 {
+        withAccessLock {
+            database.map { sqlite3_total_changes64($0) } ?? 0
         }
     }
 
@@ -231,7 +303,8 @@ final class LunchpadLayoutStore: @unchecked Sendable {
         }
     }
 
-    /// Deleting a logical folder removes assignments without touching app bundles on disk.
+    /// Deleting a logical folder removes assignments without touching app bundles on disk. Its
+    /// applications take the folder's place in the root order, keeping their folder order.
     func deleteFolder(identifier: String) throws {
         try withAccessLock {
             guard let isSystem = try folderSystemFlag(identifier: identifier) else {
@@ -240,18 +313,49 @@ final class LunchpadLayoutStore: @unchecked Sendable {
             guard !isSystem else { throw LunchpadLayoutStoreError.protectedSystemFolder }
 
             try transaction {
-                var nextPosition = try nextRootItemPosition()
-                let memberIdentifiers = try applicationIdentifiers(in: identifier)
-                for appIdentifier in memberIdentifiers {
+                let rootOrder = try positionedRootSlots(
+                    excludingApplications: [],
+                    excludingFolders: []
+                )
+                let memberSlots = try applicationIdentifiers(in: identifier).map {
+                    LunchpadRootSlot.app(identifier: $0)
+                }
+                for case .app(let appIdentifier) in memberSlots {
                     try setAssignment(
                         appIdentifier: appIdentifier,
                         folderIdentifier: nil,
-                        position: nextPosition,
+                        position: 0,
                         source: .user
                     )
-                    nextPosition += 1
                 }
                 try execute("DELETE FROM folders WHERE id = ?", [.text(identifier)])
+
+                let folderSlot = LunchpadRootSlot.folder(identifier: identifier)
+                var arrangedSlots = rootOrder.flatMap { slot in
+                    slot == folderSlot ? memberSlots : [slot]
+                }
+                if !rootOrder.contains(folderSlot) {
+                    arrangedSlots.append(contentsOf: memberSlots)
+                }
+                try writeRootOrder(arrangedSlots)
+            }
+        }
+    }
+
+    /// Assigns consecutive root positions in the given order.
+    private func writeRootOrder(_ slots: [LunchpadRootSlot]) throws {
+        for (index, slot) in slots.enumerated() {
+            switch slot {
+            case .app(let identifier):
+                try execute(
+                    "UPDATE applications SET sort_position = ? WHERE id = ? AND folder_id IS NULL",
+                    [.int64(Int64(index)), .text(identifier)]
+                )
+            case .folder(let identifier):
+                try execute(
+                    "UPDATE folders SET sort_position = ? WHERE id = ?",
+                    [.int64(Int64(index)), .text(identifier)]
+                )
             }
         }
     }
@@ -604,42 +708,56 @@ final class LunchpadLayoutStore: @unchecked Sendable {
             .appendingPathComponent("layout.sqlite3", isDirectory: false)
     }
 
+    /// Upgrades the schema one version at a time, each step in its own transaction, and records
+    /// the result in `PRAGMA user_version`. A database written by a newer build is refused rather
+    /// than modified, so the app falls back to the flat layout and the newer data stays intact.
     private func migrate() throws {
-        try execute(
-            """
-            CREATE TABLE IF NOT EXISTS folders(
-                id TEXT PRIMARY KEY,
-                system_key TEXT UNIQUE,
-                name TEXT NOT NULL,
-                sort_position INTEGER NOT NULL,
-                created_at REAL NOT NULL,
-                is_system INTEGER NOT NULL DEFAULT 0,
-                is_default INTEGER NOT NULL DEFAULT 0
-            )
-            """
-        )
-        try execute(
-            """
-            CREATE TABLE IF NOT EXISTS applications(
-                id TEXT PRIMARY KEY,
-                bundle_identifier TEXT,
-                display_name TEXT NOT NULL,
-                path TEXT NOT NULL,
-                folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL,
-                sort_position INTEGER NOT NULL,
-                assignment_source TEXT NOT NULL DEFAULT 'none'
-                    CHECK(assignment_source IN ('none', 'default', 'user')),
-                is_present INTEGER NOT NULL DEFAULT 1,
-                first_seen_at REAL NOT NULL,
-                last_seen_at REAL NOT NULL
-            )
-            """
-        )
-        try execute(
-            "CREATE INDEX IF NOT EXISTS applications_folder_position "
-                + "ON applications(folder_id, sort_position)"
-        )
-        try execute("PRAGMA user_version = 1")
+        let version = try scalarInt64("PRAGMA user_version", values: [])
+        guard version <= Self.currentSchemaVersion else {
+            throw LunchpadLayoutStoreError.unsupportedSchemaVersion(version)
+        }
+
+        if version < 1 {
+            try transaction {
+                // Version 1 is the original schema. Earlier builds always stored version 1, so
+                // IF NOT EXISTS only matters for an interrupted first launch.
+                try execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS folders(
+                        id TEXT PRIMARY KEY,
+                        system_key TEXT UNIQUE,
+                        name TEXT NOT NULL,
+                        sort_position INTEGER NOT NULL,
+                        created_at REAL NOT NULL,
+                        is_system INTEGER NOT NULL DEFAULT 0,
+                        is_default INTEGER NOT NULL DEFAULT 0
+                    )
+                    """
+                )
+                try execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS applications(
+                        id TEXT PRIMARY KEY,
+                        bundle_identifier TEXT,
+                        display_name TEXT NOT NULL,
+                        path TEXT NOT NULL,
+                        folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL,
+                        sort_position INTEGER NOT NULL,
+                        assignment_source TEXT NOT NULL DEFAULT 'none'
+                            CHECK(assignment_source IN ('none', 'default', 'user')),
+                        is_present INTEGER NOT NULL DEFAULT 1,
+                        first_seen_at REAL NOT NULL,
+                        last_seen_at REAL NOT NULL
+                    )
+                    """
+                )
+                try execute(
+                    "CREATE INDEX IF NOT EXISTS applications_folder_position "
+                        + "ON applications(folder_id, sort_position)"
+                )
+                try execute("PRAGMA user_version = 1")
+            }
+        }
     }
 
     private func seedSystemFolders() throws {

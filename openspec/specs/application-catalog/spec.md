@@ -100,6 +100,18 @@ Lunchpad SHALL treat FSEvents as invalidation signals and SHALL reconcile the ca
 - **WHEN** FSEvents reports that a watched root changed
 - **THEN** Lunchpad rebuilds the stream from the nearest existing ancestor and performs a recovery scan
 
+#### Scenario: A missing root is watched through an ancestor
+
+- **GIVEN** `~/Applications` does not exist, so Lunchpad watches the home directory
+- **WHEN** an unrelated file directly in that ancestor changes, such as a shell history file
+- **THEN** Lunchpad ignores the event without scanning, writing the layout database, or invalidating icons
+
+#### Scenario: A missing root appears
+
+- **GIVEN** a root is watched through an existing ancestor
+- **WHEN** the root directory is created or removed
+- **THEN** Lunchpad rebuilds the stream from the nearest existing directory and performs a recovery scan
+
 ### Requirement: Nonfatal catalog failure
 
 Catalog or layout persistence failures SHALL NOT terminate the resident Lunchpad process.

@@ -91,7 +91,7 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
                 )
             } catch {
                 // Preserve the flat-layout fallback after initial database setup fails.
-                print("⚠️ Layout database unavailable, using flat layout: \(error)")
+                Log.layout.error("Layout database unavailable, using flat layout: \(error)")
                 layoutStore = nil
                 let items = scanner.scanApplicationsFlat()
                 lastCatalogSignature = catalogSignature(items)
@@ -123,7 +123,9 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
                 self.pendingIconInvalidationPaths.formUnion(changedBundlePaths)
             }
             if batch.requiresFullRescan {
-                print("Application directory events lost or root changed; performing recovery full scan")
+                Log.catalog.notice(
+                    "Application directory events lost or root changed; performing recovery full scan"
+                )
             }
             if batch.requiresStreamRestart {
                 // Rebuild monitoring from the nearest existing parent after a root moves or disappears.
@@ -131,7 +133,7 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
                 do {
                     try self.monitor.start()
                 } catch {
-                    print("⚠️ Failed to rebuild application directory monitor: \(error)")
+                    Log.catalog.error("Failed to rebuild application directory monitor: \(error)")
                 }
             }
             self.scheduleFirstSnapshot(for: generation, after: self.quietDelay)
@@ -196,7 +198,7 @@ final class ApplicationCatalogSynchronizer: @unchecked Sendable {
         } catch {
             // A database error must not crash the resident process. Preserve the current UI
             // and retry after the next directory event.
-            print("⚠️ Failed to update application catalog: \(error)")
+            Log.catalog.error("Failed to update application catalog: \(error)")
         }
     }
 

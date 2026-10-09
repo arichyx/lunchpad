@@ -4,7 +4,13 @@ import AppKit
 final class LunchpadGridLayout: NSCollectionViewLayout {
     private let columns: Int
     private let rows: Int
-    private let itemSize: NSSize
+    /// Scaled by `LunchpadGridMetrics` on small displays.
+    var itemSize: NSSize {
+        didSet {
+            guard itemSize != oldValue else { return }
+            invalidateLayout()
+        }
+    }
     private var cachedAttributes: [NSCollectionViewLayoutAttributes] = []
 
     init(columns: Int, rows: Int, itemSize: NSSize) {

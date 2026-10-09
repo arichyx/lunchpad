@@ -127,4 +127,23 @@ final class ScreenSelectionPolicyTests: XCTestCase {
 
         XCTAssertNil(index)
     }
+
+    func testPresentedScreenFollowsItsDisplayAcrossReordering() {
+        XCTAssertEqual(
+            ScreenSelectionPolicy.presentedScreenIndex(displayID: 7, displayIDs: [3, nil, 7]),
+            2
+        )
+    }
+
+    func testPresentedScreenIsMissingAfterItsDisplayDisconnects() {
+        XCTAssertNil(ScreenSelectionPolicy.presentedScreenIndex(displayID: 7, displayIDs: [3, 4]))
+        XCTAssertNil(ScreenSelectionPolicy.presentedScreenIndex(displayID: nil, displayIDs: [3]))
+    }
+
+    @MainActor
+    func testEveryConnectedScreenReportsADisplayID() {
+        for screen in NSScreen.screens {
+            XCTAssertNotNil(screen.displayID)
+        }
+    }
 }

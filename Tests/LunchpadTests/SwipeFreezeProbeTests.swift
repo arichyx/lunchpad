@@ -10,12 +10,12 @@ final class SwipeFreezeProbeTests: XCTestCase {
     private var grid: IconGridView!
     private var collectionView: LunchpadCollectionView!
 
-    override func tearDown() {
+    override func tearDown() async throws {
         window?.orderOut(nil)
         window = nil
         grid = nil
         collectionView = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     private func app(_ name: String) -> AppItem {

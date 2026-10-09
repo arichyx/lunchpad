@@ -19,7 +19,7 @@ app with one click. The name is intentional: Lunchpad is to Launchpad what `reqw
 - Drag icons to rearrange, drop one app on another to create a folder, or drop it on a folder
   or the folder title to move apps between the root and folders
 - Automatic updates when apps are installed, removed, or replaced
-- Layout that adapts to the Dock on any screen edge
+- Layout that adapts to the Dock on any screen edge and to smaller or scaled displays
 - Menu bar icon and configurable global hot key
 - Native settings in English and Simplified Chinese
 - No cloud service, account, or network connection required
@@ -73,13 +73,21 @@ Lunchpad starts quietly in the menu bar and does not open the full-screen interf
   Lunchpad while it is visible. The gesture is recognized only while Lunchpad is on screen.
 - In four-finger mode, when macOS is showing the desktop, an inward pinch restores the displaced
   windows without opening Lunchpad, regardless of how Show Desktop was entered.
-- Alternatively, press Control-Shift-Space or left-click the menu bar icon.
-- Change pages with a two-finger horizontal swipe, a sideways drag on empty space, the arrow
-  keys, or a page dot. Swipes and drags move the page with your fingers; release past a
-  threshold (or with a quick fling) to turn the page, and release early to snap back.
+- Alternatively, press Control-Shift-Space or left-click the menu bar icon. Every activation
+  opens Lunchpad on the display that contains the pointer.
+- Change pages with a two-finger horizontal swipe, a sideways drag on empty space, a mouse wheel,
+  or a page dot. Swipes and drags move the page with your fingers; release past a threshold (or
+  with a quick fling) to turn the page, and release early to snap back. The arrow keys move the
+  keyboard selection within the current page.
 - Type in the search field to find an app.
 - Click an app to close Lunchpad immediately and launch it.
 - Click a folder to browse its contents.
+- Drag an icon to rearrange it, drop it onto another app to create a folder, or drop it onto a
+  folder to add it. Inside a folder, drag an app onto the folder title to move it back to the
+  main page.
+- Click an open folder's title to rename it, or right-click a folder for Rename Folder and Delete
+  Folder. Deleting a folder puts its apps back where the folder was; the Other folder cannot be
+  renamed or deleted.
 - Press Escape or click empty space to leave a folder or close Lunchpad.
 - Right-click the menu bar icon for Show, Settings, and Quit actions.
 
@@ -100,15 +108,17 @@ immediately and are stored locally.
 
 - **Language** changes Lunchpad's own interface between Follow System, English, and Simplified
   Chinese. It does not change application names, which continue to follow macOS bundle localization.
-- **Application Order** sorts apps by name, by the app bundle's filesystem creation time, or by its
-  modification time. Both time modes are newest-first; creation time is not guaranteed to be the
-  installation or release date. Folder positions and stored logical layout positions are preserved
-  when the mode changes.
+- **Application Order** keeps your manual arrangement or sorts apps by name, by the app bundle's
+  filesystem creation time, or by its modification time. Both time modes are newest-first; creation
+  time is not guaranteed to be the installation or release date. Folder positions and stored
+  logical layout positions are preserved when the mode changes, and dragging an icon switches to
+  Manual.
 - **Keyboard Shortcut** records a modified key or function key. Use Clear to disable the global hot
   key. Lunchpad keeps the previous shortcut when Carbon reports a registration conflict. macOS does
   not provide a complete public registry of every application-level or system shortcut, so a
   successfully registered combination can still overlap behavior handled above Carbon.
-- **Launch at Login** uses the macOS login-item service and is available in the packaged app.
+- **Launch at Login** uses the macOS login-item service and is available in the packaged app. If
+  macOS asks for approval, Settings explains this and opens System Settings → General → Login Items.
 - **Trackpad Gesture** can stop or restart the existing trackpad monitor without restarting
   Lunchpad. **Gesture Fingers** selects strict three-finger recognition or four-finger recognition;
   changing it restarts the monitor immediately. Three-finger mode rejects a contact sequence that
@@ -137,8 +147,10 @@ Lunchpad stores page order and logical folder assignments locally at:
 Logical folders do not move or modify real `.app` bundles. Removing a logical folder only returns
 its apps to the root level.
 
-If the layout database cannot be opened, Lunchpad falls back to a flat catalog and keeps launching
-and searching usable; drag arrangement is disabled until persistent layout storage is available.
+If the layout database cannot be opened, or was written by a newer Lunchpad version, Lunchpad
+falls back to a flat catalog and keeps launching and searching usable; drag arrangement and folder
+editing are disabled until persistent layout storage is available. A newer database is left
+untouched.
 
 ## Development
 
@@ -157,6 +169,15 @@ keep it attached to the terminal for live logs:
 ./Scripts/dev-run.sh
 ```
 
+Diagnostics go to the unified log (and are echoed to the terminal when standard output is one).
+To follow a packaged or background instance:
+
+```bash
+log stream --level info --predicate 'subsystem == "com.arichyx.Lunchpad"'
+```
+
+Set `LUNCHPAD_GESTURE_DEBUG=1` to print per-frame trackpad diagnostics.
+
 The trackpad connection and report format are documented in
 [`Docs/IOKitMultitouch.md`](Docs/IOKitMultitouch.md). The app bundle is assembled by
 [`Scripts/package-app.sh`](Scripts/package-app.sh).
@@ -166,8 +187,9 @@ Release tags, branches, and GitHub Release automation are documented in
 
 ## Known limitations
 
-- External Magic Trackpads may use report formats that are not handled yet.
-- Folder rename and delete UI and dragging folders onto other folders are not implemented yet.
+- External Magic Trackpads may use report formats that are not handled yet. When a built-in
+  trackpad is present, Lunchpad always monitors it.
+- Dragging folders onto other folders is not implemented yet.
 - Ad-hoc builds cannot be notarized and may require manual approval after download.
 - Confirm that `Assets/AppIcon.png` is licensed for redistribution before publishing binaries.
 

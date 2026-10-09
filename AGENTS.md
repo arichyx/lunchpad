@@ -16,6 +16,8 @@ model, low-latency interaction, and native macOS behavior.
   architectural decision.
 - Keep the project SwiftPM-only. Do not add an Xcode project, storyboard, nib, or generated IDE
   files merely to build the application.
+- Build in the Swift 6 language mode and keep every target free of concurrency warnings. Prefer
+  actor isolation; reserve `@unchecked Sendable` for types whose synchronization is documented.
 - The main process is an accessory-style resident application with a menu bar item and no
   persistent Dock icon.
 - Write code comments, documentation, commit messages, and release notes in English.
@@ -51,6 +53,9 @@ swift build --package-path /absolute/path/to/lunchpad
 swift test --package-path /absolute/path/to/lunchpad
 /absolute/path/to/lunchpad/.build/debug/Lunchpad
 ```
+
+`swift test --parallel` runs test classes in separate processes and is much faster locally; CI uses
+it for pull requests, while the release workflow keeps a serial run.
 
 When packaging or release metadata changes, run the complete package validation with the intended
 version:
@@ -97,8 +102,9 @@ scope. Report any check that could not be run.
   must not open Lunchpad.
 - Detect the actual WindowServer state rather than inferring it from a preceding outward gesture.
   Show Desktop can also be entered through a Hot Corner, keyboard shortcut, or wallpaper click.
-- Sample Show Desktop state at the beginning of a new contact sequence, before macOS starts moving
-  windows back on screen. Suppress only that contact sequence.
+- Sample Show Desktop state once per contact sequence, when its second contact lands and before
+  macOS starts moving windows back on screen. Single-contact sequences (pointer movement, taps,
+  clicks) must not query WindowServer. Suppress only that contact sequence.
 - Keep the geometry heuristic and its edge cases covered by `DesktopStateKitTests`.
 
 ### Application catalog and monitoring
