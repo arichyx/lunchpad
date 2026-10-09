@@ -82,7 +82,15 @@ final class AppIconCache: @unchecked Sendable {
         NSGraphicsContext.restoreGraphicsState()
 
         guard let image = context.makeImage() else { return icon }
-        return NSImage(cgImage: image, size: NSSize(width: pointSize, height: pointSize))
+        // An explicit bitmap rep keeps the rendered pixel size. `NSImage(cgImage:size:)` wraps
+        // the bitmap in a snapshot rep whose pixel size follows the display environment; on a
+        // machine without a Retina screen it reported 1x instead of the requested scale.
+        let size = NSSize(width: pointSize, height: pointSize)
+        let representation = NSBitmapImageRep(cgImage: image)
+        representation.size = size
+        let rasterized = NSImage(size: size)
+        rasterized.addRepresentation(representation)
+        return rasterized
     }
 
     /// Synchronous lookup-and-load for code that must have an image now (cell configuration
