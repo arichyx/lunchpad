@@ -64,6 +64,82 @@ final class AppScannerTests: XCTestCase {
         })
     }
 
+    /// iOS and iPadOS apps installed on Apple Silicon use a `WrappedBundle` symlink to a flat iOS
+    /// bundle instead of `Contents/`. The outer wrapper is the launchable application URL.
+    func testDiscoveryIncludesWrappedIOSApplicationOnlyWhenComplete() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "LunchpadScannerWrappedTests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let root = directory.appendingPathComponent("Applications", isDirectory: true)
+        let wrapperURL = root.appendingPathComponent("Wrapped Reader.app", isDirectory: true)
+        let innerURL = wrapperURL.appendingPathComponent(
+            "Wrapper/WrappedReader.app",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: innerURL, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            atPath: wrapperURL.appendingPathComponent("WrappedBundle").path,
+            withDestinationPath: "Wrapper/WrappedReader.app"
+        )
+
+        let info: [String: Any] = [
+            "CFBundleIdentifier": "test.wrapped-reader",
+            "CFBundleExecutable": "WrappedReader",
+            "CFBundleName": "WrappedReader",
+            "CFBundleDevelopmentRegion": "en",
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: innerURL.appendingPathComponent("Info.plist"))
+        // Flat iOS bundles keep localized InfoPlist.strings directly below the bundle root.
+        for localization in ["en", "zh-Hans"] {
+            let lprojURL = innerURL.appendingPathComponent(
+                "\(localization).lproj",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: lprojURL,
+                withIntermediateDirectories: true
+            )
+            try PropertyListSerialization.data(
+                fromPropertyList: ["CFBundleDisplayName": "Wrapped Reader"],
+                format: .xml,
+                options: 0
+            ).write(to: lprojURL.appendingPathComponent("InfoPlist.strings"))
+        }
+
+        let scanner = AppScanner(roots: [root])
+        XCTAssertFalse(scanner.discoverApplications().contains {
+            $0.item.bundleIdentifier == "test.wrapped-reader"
+        }, "A wrapper without its main executable is still being installed")
+
+        let executableURL = innerURL.appendingPathComponent("WrappedReader")
+        XCTAssertTrue(FileManager.default.createFile(
+            atPath: executableURL.path,
+            contents: Data()
+        ))
+
+        let app = try XCTUnwrap(scanner.discoverApplications().first {
+            $0.item.bundleIdentifier == "test.wrapped-reader"
+        })
+        XCTAssertEqual(app.item.identifier, "bundle:test.wrapped-reader")
+        XCTAssertEqual(
+            app.item.url,
+            wrapperURL.resolvingSymlinksInPath().standardizedFileURL
+        )
+        XCTAssertEqual(app.item.name, "Wrapped Reader")
+        XCTAssertEqual(app.item.searchAliases, ["WrappedReader"])
+
+        let fingerprint = try XCTUnwrap(scanner.captureStabilitySnapshot().first)
+        XCTAssertEqual(
+            fingerprint.executablePath,
+            executableURL.resolvingSymlinksInPath().standardizedFileURL.path
+        )
+        XCTAssertNotNil(fingerprint.executableSize)
+    }
+
     func testDiscoveryReadsBundleCreationAndModificationDates() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "LunchpadScannerTests-\(UUID().uuidString)",
