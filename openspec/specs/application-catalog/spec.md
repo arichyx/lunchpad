@@ -24,12 +24,17 @@ Lunchpad SHALL discover application bundles recursively under `~/Applications`, 
 
 ### Requirement: Complete bundle validation
 
-Lunchpad SHALL expose an application only after its `Contents/Info.plist` identifies a main executable and that executable exists on disk.
+Lunchpad SHALL expose an application only after its Info.plist identifies a main executable and that executable exists on disk. A macOS bundle keeps both under `Contents/`; an iOS or iPadOS app installed on Apple Silicon keeps both at the root of the flat bundle that its `WrappedBundle` symlink references.
 
 #### Scenario: App copy is still in progress
 
 - **WHEN** Finder has created a `.app` directory but its Info.plist or main executable is not yet present
 - **THEN** Lunchpad excludes it from the catalog until a later stable scan finds a complete bundle
+
+#### Scenario: Wrapped iOS application is installed
+
+- **WHEN** a `.app` wrapper contains a `WrappedBundle` symlink to a complete flat iOS bundle
+- **THEN** Lunchpad includes the outer wrapper as the application, using the inner bundle's identifier and localized name
 
 ### Requirement: Stable application identity
 

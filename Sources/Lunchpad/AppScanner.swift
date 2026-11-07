@@ -179,12 +179,11 @@ final class AppScanner {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
 
         let canonicalURL = url.resolvingSymlinksInPath().standardizedFileURL
-        let infoPlist = canonicalURL.appendingPathComponent("Contents/Info.plist")
-        guard let info = NSDictionary(contentsOf: infoPlist) as? [String: Any],
+        let layout = bundleLayout(at: canonicalURL)
+        guard let info = NSDictionary(contentsOf: layout.infoPlistURL) as? [String: Any],
               let executableName = nonEmptyString(info["CFBundleExecutable"]),
               FileManager.default.fileExists(
-                  atPath: canonicalURL
-                      .appendingPathComponent("Contents/MacOS", isDirectory: true)
+                  atPath: layout.executableDirectoryURL
                       .appendingPathComponent(executableName)
                       .path
               ) else {
@@ -444,13 +443,33 @@ final class AppScanner {
         }
     }
 
+    /// Locates the Info.plist and main-executable directory of an application bundle. iOS and
+    /// iPadOS apps installed on Apple Silicon Macs are wrapper directories whose `WrappedBundle`
+    /// symlink points to a flat iOS bundle under `Wrapper/`; that bundle keeps Info.plist and its
+    /// executable at the bundle root instead of under `Contents/`. The outer wrapper remains the
+    /// application URL because LaunchServices registers, icons, and opens it.
+    private func bundleLayout(
+        at appURL: URL
+    ) -> (infoPlistURL: URL, executableDirectoryURL: URL) {
+        let wrappedBundleURL = appURL.appendingPathComponent("WrappedBundle", isDirectory: true)
+        if FileManager.default.fileExists(atPath: wrappedBundleURL.path) {
+            let innerURL = wrappedBundleURL.resolvingSymlinksInPath().standardizedFileURL
+            return (innerURL.appendingPathComponent("Info.plist"), innerURL)
+        }
+
+        let contentsURL = appURL.appendingPathComponent("Contents", isDirectory: true)
+        return (
+            contentsURL.appendingPathComponent("Info.plist"),
+            contentsURL.appendingPathComponent("MacOS", isDirectory: true)
+        )
+    }
+
     private func makeFingerprint(at appURL: URL) -> ApplicationBundleFingerprint {
-        let infoPlistURL = appURL.appendingPathComponent("Contents/Info.plist")
+        let layout = bundleLayout(at: appURL)
+        let infoPlistURL = layout.infoPlistURL
         let info = NSDictionary(contentsOf: infoPlistURL) as? [String: Any]
         let executableURL = nonEmptyString(info?["CFBundleExecutable"]).map {
-            appURL
-                .appendingPathComponent("Contents/MacOS", isDirectory: true)
-                .appendingPathComponent($0)
+            layout.executableDirectoryURL.appendingPathComponent($0)
         }
         let appState = fileState(at: appURL)
         let infoState = fileState(at: infoPlistURL)
